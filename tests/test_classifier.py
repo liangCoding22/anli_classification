@@ -12,7 +12,7 @@ def make(reply):
 
 def test_classify_batch_one_call_and_parsed_labels(examples):
     classifier, backend = make(lambda r: ChatResult(r.key, "neutral"))
-    preds = classifier.classify_batch(examples)
+    preds = classifier.classify_batch([(e.key, e) for e in examples])
     assert len(backend.calls) == 1 and len(backend.calls[0]) == len(examples)
     assert [p.key for p in preds] == [e.key for e in examples]
     assert all(p.pred == 1 and p.ok for p in preds)
@@ -27,7 +27,7 @@ def test_backend_error_and_empty_reply_become_failed_predictions(examples):
         return None  # backend silently dropped this request
 
     classifier, _ = make(reply)
-    preds = classifier.classify_batch(examples[:3])
+    preds = classifier.classify_batch([(e.key, e) for e in examples[:3]])
     assert preds[0].error == "RateLimitError: slow down" and preds[0].pred is None
     assert "empty reply" in preds[1].error and preds[1].pred is None
     assert preds[2].error == "no result returned"
@@ -46,6 +46,6 @@ def test_reasoning_is_kept_on_success_and_on_empty_reply(examples):
         return ChatResult(request.key, "", reasoning="ran out of budget")
 
     classifier, _ = make(reply)
-    ok, empty = classifier.classify_batch(examples[:2])
+    ok, empty = classifier.classify_batch([(e.key, e) for e in examples[:2]])
     assert ok.reasoning == "thinking..." and ok.pred == 1
     assert empty.error and empty.reasoning == "ran out of budget"

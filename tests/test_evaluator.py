@@ -72,3 +72,22 @@ def test_old_cache_lines_without_reasoning_still_load(tmp_path):
     path.write_text(json.dumps({"key": "k", "gold": 0, "pred": 0, "raw": "entailment", "error": None}) + "\n")
     pred = PredictionStore(path).load()["k"]
     assert isinstance(pred, Prediction) and pred.reasoning == ""
+
+
+def test_samples_are_keyed_separately_and_scored_with_pass_at_k(tmp_path):
+    examples = make_examples(2)
+    backend = FakeBackend(lambda r: ChatResult(r.key, gold_label(r)))
+    classifier = NliClassifier(NliPrompt(), backend, LabelParser(), max_tokens=64, temperature=0.7)
+    evaluator = Evaluator(classifier, MetricsCalculator(), tmp_path, batch_size=10, samples=3)
+
+    report = evaluator.evaluate({"dev_r1": examples})
+
+    assert sum(len(c) for c in backend.calls) == 6
+    assert report["dev_r1"]["n"] == 6
+    assert report["dev_r1"]["pass_at_k"]["pass@1"] == 1.0
+    assert report["dev_r1"]["pass_at_k"]["pass@3"] == 1.0
+    stored = PredictionStore(tmp_path / "dev_r1.jsonl").load()
+    assert set(stored) == {
+        "dev_r1/u0", "dev_r1/u0#1", "dev_r1/u0#2",
+        "dev_r1/u1", "dev_r1/u1#1", "dev_r1/u1#2",
+    }

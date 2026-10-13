@@ -9,7 +9,8 @@ from anli_classification.schemas import Example
 
 HF_DATASET = "facebook/anli"
 ROUNDS = ("r1", "r2", "r3")
-SPLITS = ("dev", "test")
+SPLITS = ("train", "dev", "test")
+DEFAULT_SPLITS = ("dev", "test")  # train is opt-in: it is large and not the evaluation set
 
 
 class AnliDataset:
@@ -36,6 +37,7 @@ class AnliDataset:
                 premise=row["premise"],
                 hypothesis=row["hypothesis"],
                 label=row["label"],
+                reason=row["reason"],
             )
             for row in rows
         ]

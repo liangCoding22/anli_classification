@@ -48,6 +48,20 @@ anli-batch-report --job-id anli-job-6b9329a3a3 --account-id <account>
 The model comes from the job record. Downloaded artifacts are reused on re-runs.
 Rows the batch returned with an error, or not at all, count as unparsed errors in the metrics.
 
+### 4. pass@1 and pass@3 (`--samples 3`)
+
+Each example is answered `--samples` times. Samples use `--temperature` (default 0.6), so repeats can differ. Metrics then include:
+
+- `pass@1`: the average share of correct samples per example.
+- `pass@3`: the share of examples where at least one of the samples is correct.
+
+```bash
+anli-eval --samples 3 --splits dev --rounds r3 --limit 1000
+```
+
+Sample 0 keeps the plain example key; extra samples are keyed `<key>#1`, `<key>#2`.
+Output files are unchanged, and each sample is a line in the slice's JSONL.
+
 ### Outputs and versioning
 
 Everything for one model and one prompt version lands in one directory:
@@ -65,9 +79,12 @@ outputs/<model-slug>/<prompt-version>/
     └── summary.json        job metadata, row counts, headline metrics
 ```
 
-- **Model slug:** the last path segment of the model name, e.g. `nemotron-lightning-3p5-30b-a3b`.
-- **Prompt version:** `NliPrompt.VERSION` in `prompts.py` (currently `zero-shot-v1`).
-  Bump it whenever the wording changes, so results from different prompts never mix.
+- **Model slug:** the last path segment of the model name, e.g. `qwen3-4b`.
+- **Prompt version:** the `VERSION` of a prompt class in `prompts.py`. Available: `zero-shot-v3`
+  (default, `NliPromptV3`, defines the labels as logical relations) and `zero-shot-v2`
+  (`NliPrompt`). Pick one with `--prompt-version`; each version writes to its own directory, so
+  results from different prompts never mix. Add a new class and register it in `PROMPTS` for
+  further variants; don't edit an existing prompt's wording.
   Model changes get a new slug directory automatically.
 - **Resuming:** runs read the slice JSONL files first. Successful predictions are kept,
   and failed ones (errors, empty replies) are retried.

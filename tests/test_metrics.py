@@ -35,3 +35,27 @@ def test_macro_f1_hand_computed():
 def test_empty_input():
     m = MetricsCalculator().compute([])
     assert m["n"] == 0 and m["accuracy"] == 0.0
+
+
+def sample(key, gold, p):
+    return Prediction(key=key, gold=gold, pred=p, raw="")
+
+
+def test_pass_at_k_over_three_samples_per_example():
+    # A: 1 of 3 correct. B: 3 of 3 correct. C: 0 of 3 correct.
+    preds = [
+        sample("dev_r1/A", 0, 0), sample("dev_r1/A#1", 0, 1), sample("dev_r1/A#2", 0, 2),
+        sample("dev_r1/B", 1, 1), sample("dev_r1/B#1", 1, 1), sample("dev_r1/B#2", 1, 1),
+        sample("dev_r1/C", 2, 0), sample("dev_r1/C#1", 2, 0), sample("dev_r1/C#2", 2, 0),
+    ]
+    m = MetricsCalculator().compute(preds)["pass_at_k"]
+    assert m["examples"] == 3
+    assert m["pass@1"] == pytest.approx((1 / 3 + 1 + 0) / 3)  # mean per-sample correct rate
+    assert m["pass@3"] == pytest.approx(2 / 3)  # any of the three samples correct
+
+
+def test_pass_at_k_skips_examples_with_too_few_samples():
+    preds = [sample("dev_r1/A", 0, 0), sample("dev_r1/B", 1, 0)]
+    m = MetricsCalculator().compute(preds)["pass_at_k"]
+    assert m["pass@1"] == pytest.approx(0.5)
+    assert m["pass@3"] is None

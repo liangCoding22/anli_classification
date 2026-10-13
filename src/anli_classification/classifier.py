@@ -9,22 +9,33 @@ from anli_classification.schemas import Example, Prediction
 
 
 def prediction_from_result(
-    example: Example, result: Optional[ChatResult], parser: LabelParser
+    example: Example, key: str, result: Optional[ChatResult], parser: LabelParser
 ) -> Prediction:
-    """Turn one backend reply (or its absence) into a scored Prediction."""
+    """Turn one backend reply (or its absence) into a scored Prediction stored under `key`."""
+    source = dict(
+        key=key,
+        gold=example.label,
+        premise=example.premise,
+        hypothesis=example.hypothesis,
+        reason=example.reason,
+    )
     if result is None:
-        return Prediction(example.key, example.label, None, "", "no result returned")
+        return Prediction(**source, pred=None, raw="", error="no result returned")
     if result.error:
         return Prediction(
-            example.key, example.label, None, result.text, result.error, result.reasoning
+            **source, pred=None, raw=result.text, error=result.error, reasoning=result.reasoning
         )
     if not result.text.strip():
         # Reasoning models can exhaust max_tokens and return no content.
-        error = "empty reply (raise max_tokens)"
-        return Prediction(example.key, example.label, None, result.text, error, result.reasoning)
+        return Prediction(
+            **source,
+            pred=None,
+            raw=result.text,
+            error="empty reply (raise max_tokens)",
+            reasoning=result.reasoning,
+        )
     return Prediction(
-        key=example.key,
-        gold=example.label,
+        **source,
         pred=parser.parse(result.text),
         raw=result.text,
         reasoning=result.reasoning,
@@ -40,22 +51,32 @@ class NliClassifier:
         backend: ChatBackend,
         parser: LabelParser,
         max_tokens: int,
+        temperature: float = 0.0,
+        top_p: float = 1.0,
     ) -> None:
         self.prompt = prompt
         self.backend = backend
         self.parser = parser
         self.max_tokens = max_tokens
+        self.temperature = temperature
+        self.top_p = top_p
 
-    def classify_batch(self, examples: Sequence[Example]) -> list[Prediction]:
-        if not examples:
+    def classify_batch(self, items: Sequence[tuple[str, Example]]) -> list[Prediction]:
+        """Classify `(prediction_key, example)` pairs; one prediction per pair, in order."""
+        if not items:
             return []
         requests = [
             ChatRequest(
-                key=example.key,
+                key=key,
                 messages=self.prompt.build(example),
                 max_tokens=self.max_tokens,
+                temperature=self.temperature,
+                top_p=self.top_p,
             )
-            for example in examples
+            for key, example in items
         ]
         results = {result.key: result for result in self.backend.complete(requests)}
-        return [prediction_from_result(ex, results.get(ex.key), self.parser) for ex in examples]
+        return [
+            prediction_from_result(example, key, results.get(key), self.parser)
+            for key, example in items
+        ]

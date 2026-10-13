@@ -9,6 +9,8 @@ class ChatRequest:
     key: str  # echoed back in the matching ChatResult
     messages: Sequence[dict[str, str]]
     max_tokens: int
+    temperature: float = 0.0
+    top_p: float = 1.0
 
 
 @dataclass(frozen=True)

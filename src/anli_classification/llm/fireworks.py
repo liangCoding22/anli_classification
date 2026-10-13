@@ -66,7 +66,8 @@ class FireworksChatBackend:
                 model=self.model,
                 messages=list(request.messages),
                 max_tokens=request.max_tokens,
-                temperature=0.0,
+                temperature=request.temperature,
+                top_p=request.top_p,
             )
             message = response.choices[0].message
             # Fireworks reasoning models return thinking in a separate field.
@@ -89,7 +90,8 @@ def build_batch_jsonl(chat_requests: Sequence[ChatRequest]) -> str:
                 "body": {
                     "messages": list(request.messages),
                     "max_tokens": request.max_tokens,
-                    "temperature": 0.0,
+                    "temperature": request.temperature,
+                    "top_p": request.top_p,
                 },
             }
         )

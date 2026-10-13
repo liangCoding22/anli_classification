@@ -6,12 +6,15 @@ from typing import Any, Sequence
 
 from anli_classification.classifier import NliClassifier
 from anli_classification.metrics import MetricsCalculator
-from anli_classification.schemas import Example, Prediction
+from anli_classification.schemas import Example, Prediction, sample_key
 from anli_classification.store import PredictionStore
 
 
 class Evaluator:
-    """Runs a classifier over named slices of examples, resuming from a cache."""
+    """Runs a classifier over named slices of examples, resuming from a cache.
+
+    With `samples` > 1, each example is answered that many times (for pass@k).
+    """
 
     def __init__(
         self,
@@ -19,11 +22,13 @@ class Evaluator:
         metrics: MetricsCalculator,
         run_dir: Path,
         batch_size: int = 256,
+        samples: int = 1,
     ) -> None:
         self.classifier = classifier
         self.metrics = metrics
         self.run_dir = run_dir
         self.batch_size = batch_size
+        self.samples = samples
 
     def evaluate(self, slices: dict[str, Sequence[Example]]) -> dict[str, dict[str, Any]]:
         report: dict[str, dict[str, Any]] = {}
@@ -39,14 +44,17 @@ class Evaluator:
     def _run_slice(self, name: str, examples: Sequence[Example]) -> list[Prediction]:
         store = PredictionStore(self.run_dir / f"{name}.jsonl")
         cached = store.load()
-        todo = [ex for ex in examples if ex.key not in cached or not cached[ex.key].ok]
+        items = [
+            (sample_key(ex.key, s), ex) for ex in examples for s in range(self.samples)
+        ]
+        todo = [(key, ex) for key, ex in items if key not in cached or not cached[key].ok]
         fresh: dict[str, Prediction] = {}
         for start in range(0, len(todo), self.batch_size):
             preds = self.classifier.classify_batch(todo[start : start + self.batch_size])
             store.append(preds)
             fresh.update((p.key, p) for p in preds)
         final = {**cached, **fresh}
-        return [final[ex.key] for ex in examples if ex.key in final]
+        return [final[key] for key, _ in items if key in final]
 
     def _write_report(self, report: dict[str, Any]) -> None:
         self.run_dir.mkdir(parents=True, exist_ok=True)

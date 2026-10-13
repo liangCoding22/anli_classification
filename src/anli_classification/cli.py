@@ -6,13 +6,13 @@ from typing import Optional, Sequence
 
 from anli_classification.classifier import NliClassifier
 from anli_classification.config import DEFAULT_MODEL, RunConfig
-from anli_classification.data import AnliDataset, ROUNDS, SPLITS
+from anli_classification.data import AnliDataset, DEFAULT_SPLITS, ROUNDS, SPLITS
 from anli_classification.evaluator import Evaluator
 from anli_classification.llm.base import ChatBackend
 from anli_classification.llm.fireworks import FireworksBatchBackend, FireworksChatBackend
 from anli_classification.metrics import MetricsCalculator, format_metrics_line
 from anli_classification.parsers import LabelParser
-from anli_classification.prompts import NliPrompt
+from anli_classification.prompts import PROMPTS, NliPromptV3
 
 
 def build_backend(config: RunConfig) -> ChatBackend:
@@ -29,35 +29,47 @@ def build_backend(config: RunConfig) -> ChatBackend:
 
 def build_classifier(config: RunConfig) -> NliClassifier:
     return NliClassifier(
-        prompt=NliPrompt(),
+        prompt=PROMPTS[config.prompt_version](),
         backend=build_backend(config),
         parser=LabelParser(),
         max_tokens=config.max_tokens,
+        temperature=config.temperature,
+        top_p=config.top_p,
     )
 
 
 def parse_args(argv: Optional[Sequence[str]] = None) -> RunConfig:
     parser = argparse.ArgumentParser(description="Evaluate zero-shot ANLI classification.")
     parser.add_argument("--model", default=DEFAULT_MODEL)
+    parser.add_argument("--prompt-version", choices=tuple(PROMPTS), default=NliPromptV3.VERSION)
     parser.add_argument("--backend", choices=("chat", "batch"), default="chat")
-    parser.add_argument("--splits", nargs="+", choices=SPLITS, default=list(SPLITS))
+    parser.add_argument("--splits", nargs="+", choices=SPLITS, default=list(DEFAULT_SPLITS))
     parser.add_argument("--rounds", nargs="+", choices=ROUNDS, default=list(ROUNDS))
     parser.add_argument("--limit", type=int, default=None, help="random N per slice")
     parser.add_argument("--seed", type=int, default=0)
-    parser.add_argument("--max-tokens", type=int, default=2048)
+    parser.add_argument("--max-tokens", type=int, default=4096)
+    parser.add_argument("--samples", type=int, default=1, help="answers per example; 3 gives pass@3")
+    parser.add_argument("--temperature", type=float, default=0.6, help="must be > 0 for --samples > 1")
+    parser.add_argument("--top-p", type=float, default=0.95, help="nucleus sampling cutoff")
     parser.add_argument("--concurrency", type=int, default=8)
     parser.add_argument("--batch-size", type=int, default=256)
     parser.add_argument("--account-id", default=None)
     parser.add_argument("--output-dir", default="outputs")
     args = parser.parse_args(argv)
+    if args.samples < 1:
+        parser.error("--samples must be at least 1")
     return RunConfig(
         model=args.model,
+        prompt_version=args.prompt_version,
         backend=args.backend,
         splits=tuple(args.splits),
         rounds=tuple(args.rounds),
         limit=args.limit,
         seed=args.seed,
         max_tokens=args.max_tokens,
+        samples=args.samples,
+        temperature=args.temperature,
+        top_p=args.top_p,
         concurrency=args.concurrency,
         batch_size=args.batch_size,
         account_id=args.account_id,
@@ -74,7 +86,11 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
         for round_id in config.rounds
     }
     evaluator = Evaluator(
-        build_classifier(config), MetricsCalculator(), config.run_dir, config.batch_size
+        build_classifier(config),
+        MetricsCalculator(),
+        config.run_dir,
+        config.batch_size,
+        config.samples,
     )
     report = evaluator.evaluate(slices)
     for name, m in report.items():

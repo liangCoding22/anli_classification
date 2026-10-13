@@ -3,6 +3,7 @@ import json
 import pytest
 
 from anli_classification.batch_report import BatchJobReporter
+from anli_classification.prompts import NliPromptV3
 from anli_classification.schemas import Example
 
 
@@ -46,7 +47,7 @@ def test_report_writes_predictions_metrics_and_summary(tmp_path):
 
     summary = reporter.report("job1")
 
-    run_dir = tmp_path / "demo-model" / "zero-shot-v1"
+    run_dir = tmp_path / "demo-model" / NliPromptV3.VERSION
     job_dir = run_dir / "batch_jobs" / "job1"
     assert {p.name for p in job_dir.iterdir()} == {
         "job.json", "input.jsonl", "output.jsonl", "metrics.json", "summary.json",
