@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "anli-classification"
+version = "0.1.0"
+description = "Fine-tune a transformer for 3-way NLI on the ANLI dataset."
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+  "accelerate>=0.33.0",
+  "datasets>=2.20.0",
+  "evaluate>=0.4.2",
+  "scikit-learn>=1.4.0",
+  "torch>=2.2.0",
+  "transformers>=4.44.0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0"]
+
+[project.scripts]
+anli-train = "anli_classification.train:main"
+anli-eval = "anli_classification.evaluate:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
