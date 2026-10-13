@@ -1,0 +1,30 @@
+from __future__ import annotations
+
+from dataclasses import dataclass
+from typing import Optional, Protocol, Sequence
+
+
+@dataclass(frozen=True)
+class ChatRequest:
+    key: str  # echoed back in the matching ChatResult
+    messages: Sequence[dict[str, str]]
+    max_tokens: int
+
+
+@dataclass(frozen=True)
+class ChatResult:
+    key: str
+    text: str = ""
+    error: Optional[str] = None
+    reasoning: str = ""
+
+
+class ChatBackend(Protocol):
+    """Anything that turns chat requests into replies, one result per request.
+
+    Implementations must not raise for per-request failures; report them in
+    `ChatResult.error` so one bad row cannot sink a whole batch.
+    """
+
+    def complete(self, requests: Sequence[ChatRequest]) -> list[ChatResult]:
+        ...
