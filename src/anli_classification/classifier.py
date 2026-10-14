@@ -53,6 +53,7 @@ class NliClassifier:
         max_tokens: int,
         temperature: float = 0.0,
         top_p: float = 1.0,
+        top_k: Optional[int] = None,
     ) -> None:
         self.prompt = prompt
         self.backend = backend
@@ -60,6 +61,7 @@ class NliClassifier:
         self.max_tokens = max_tokens
         self.temperature = temperature
         self.top_p = top_p
+        self.top_k = top_k
 
     def classify_batch(self, items: Sequence[tuple[str, Example]]) -> list[Prediction]:
         """Classify `(prediction_key, example)` pairs; one prediction per pair, in order."""
@@ -72,6 +74,7 @@ class NliClassifier:
                 max_tokens=self.max_tokens,
                 temperature=self.temperature,
                 top_p=self.top_p,
+                top_k=self.top_k,
             )
             for key, example in items
         ]

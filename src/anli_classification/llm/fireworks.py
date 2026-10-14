@@ -92,6 +92,7 @@ def build_batch_jsonl(chat_requests: Sequence[ChatRequest]) -> str:
                     "max_tokens": request.max_tokens,
                     "temperature": request.temperature,
                     "top_p": request.top_p,
+                    **({"top_k": request.top_k} if request.top_k is not None else {}),
                 },
             }
         )

@@ -33,6 +33,7 @@ class RunConfig:
     samples: int = 1  # answers per example; 3 gives pass@3
     temperature: float = 0.6  # >0 is needed for samples to differ
     top_p: float = 0.95  # nucleus sampling cutoff; 1.0 disables it
+    top_k: Optional[int] = None  # None: server default; 0 disables top-k
     concurrency: int = 8  # chat backend only
     batch_size: int = 256  # examples per chunk; one batch job per chunk
     account_id: Optional[str] = None  # batch backend only

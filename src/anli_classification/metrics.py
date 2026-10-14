@@ -3,6 +3,7 @@ from __future__ import annotations
 from math import comb
 from typing import Any, Sequence
 
+from anli_classification.parsers import is_well_formed
 from anli_classification.schemas import LABELS, NUM_LABELS, Prediction, example_key_of
 
 
@@ -30,13 +31,18 @@ def pass_at_k(predictions: Sequence[Prediction], ks: Sequence[int] = (1, 3, 5, 8
 def format_metrics_line(name: str, m: dict[str, Any]) -> str:
     """One console line summarising a slice's metrics dict (from MetricsCalculator.compute)."""
     line = (
-        f"{name:10s} n={m['n']:5d} acc={m['accuracy']:.4f} "
-        f"macro_f1={m['macro_f1']:.4f} unparsed={m['unparsed']} errors={m['errors']}"
+        f"{name:10s} n={m['n']:5d} acc={m['accuracy']:.4f} strict_acc={m['strict_accuracy']:.4f} "
+        f"macro_f1={m['macro_f1']:.4f} malformed={m['malformed']} unparsed={m['unparsed']} errors={m['errors']}"
     )
     for name_, value in m.get("pass_at_k", {}).items():
         if name_.startswith("pass@") and value is not None:
             line += f" {name_}={value:.4f}"
     return line
+
+
+def is_malformed(prediction: Prediction) -> bool:
+    """True when a reply came back but is not exactly one label word (see parsers.is_well_formed)."""
+    return prediction.ok and not is_well_formed(prediction.raw)
 
 
 class MetricsCalculator:
@@ -66,9 +72,14 @@ class MetricsCalculator:
             if p.pred is not None:
                 matrix[p.gold][p.pred] += 1
 
+        # Malformed answers (several labels, label not first, no label, empty) count as wrong here.
+        malformed = [p for p in predictions if is_malformed(p)]
+        strict_correct = sum(p.pred == p.gold and not is_malformed(p) for p in predictions)
         return {
             "n": n,
             "accuracy": correct / n if n else 0.0,
+            "strict_accuracy": strict_correct / n if n else 0.0,
+            "malformed": len(malformed),
             "macro_f1": f1_total / NUM_LABELS,
             "unparsed": sum(p.pred is None for p in predictions),
             "errors": sum(not p.ok for p in predictions),

@@ -21,14 +21,17 @@ from __future__ import annotations
 
 import argparse
 import functools
+import math
 import json
 import os
+import re
 import threading
 import time
 from pathlib import Path
 from typing import Any, Optional, Sequence
 
-from anli_classification.parsers import LabelParser
+from anli_classification.parsers import LabelParser, is_well_formed, unparsed_reason
+from anli_classification.rl_summary import write_summary
 from anli_classification.prompts import PROMPTS, NliPromptV3
 from anli_classification.schemas import Example
 from anli_classification.config import DEFAULT_MODEL
@@ -36,16 +39,17 @@ from anli_classification.config import DEFAULT_MODEL
 # Settings from the cookbook's DeepMath example (qwen3-4b, 8 completions per prompt),
 # adjusted for this task: sampling at temperature 1.0 for GRPO, and 4096 completion tokens so
 # qwen3 reasoning is not cut off (the cookbook default of 1024 is too short for it).
+FORMAT_SNAPSHOT_EVERY = 512  # training rollouts per format snapshot: 64 prompt groups x 8 completions
 METRICS_FILE = "metrics.jsonl"  # every metric the cookbook logs, one JSON line per call
 ROLLOUTS_FILE = "rollouts.jsonl"  # every graded rollout: key, gold, pred, reward, completion
 CONFIG_FILE = "run_config.json"  # arguments and example keys the run started with
-EPOCHS = 30  # passes over the training rows; rejected rows also use draws, so optimizer steps are fewer
+EPOCHS = 1  # passes over the training rows; rejected rows also use draws, so optimizer steps are fewer
 COMPLETIONS_PER_PROMPT = 8  # rollouts per prompt (the GRPO group size)
 PROMPT_GROUPS_PER_STEP = 64  # prompts per optimizer step
 LEARNING_RATE = 1e-5
 TEMPERATURE = 1.0
 MAX_COMPLETION_TOKENS = 4096
-DCP_SAVE_INTERVAL = 5  # resumable checkpoint every 5 optimizer steps
+DCP_SAVE_INTERVAL = 2  # resumable checkpoint every 2 optimizer steps
 
 # Metrics to watch in the logs or W&B (names as the cookbook's async reference documents them;
 # check them against the first step's logged keys in case the sync loop names them differently).
@@ -96,16 +100,107 @@ def load_dev_rows(n: int, seed: int, prompt_version: str = NliPromptV3.VERSION) 
     return [{"key": ex.key, "gold": ex.label, "messages": prompt.build(ex)} for ex in examples]
 
 
-def dev_accuracy(rows: Sequence[dict[str, Any]], runs_by_row: Sequence[Sequence[Any]]) -> dict[str, float]:
-    """Accuracy over the dev rows: a run's reward is 1.0 when its answer is correct."""
+def dev_accuracy(
+    rows: Sequence[dict[str, Any]],
+    runs_by_row: Sequence[Sequence[Any]],
+    formats: Optional[dict[str, str]] = None,
+) -> dict[str, float]:
+    """Dev metrics. A run's reward is 1.0 when its answer is correct, 0.0 otherwise.
+
+    Every expected rollout counts: a failed rollout (no run) and an invalid answer both count as
+    incorrect, so neither can inflate the accuracy. `dev/accuracy` is the reward mean over all
+    expected rollouts; `dev/valid_accuracy` is over the rollouts that returned an answer. `dev/strict_accuracy` is over the same rollouts and also needs a parsed answer.
+    `formats` maps each row key to its parse status ('parsed' or an unparsed reason), recorded by the
+    eval rollouts. It is cleared after each evaluation.
+    """
     runs = [run for row_runs in runs_by_row for run in row_runs]
     scored = [run for run in runs if run is not None]
-    correct = sum(run.segments[0].reward for run in scored)
-    return {
-        "dev/accuracy": correct / len(scored) if scored else 0.0,
-        "dev/rows": float(len(rows)),
+    correct = sum(run.segments[0].reward == 1.0 for run in scored)
+    metrics = {
+        "dev/accuracy": correct / len(runs) if runs else 0.0,
+        "dev/valid_accuracy": correct / len(scored) if scored else 0.0,
         "dev/dropped_ratio": 1.0 - len(scored) / len(runs) if runs else 0.0,
+        "dev/rows": float(len(rows)),
     }
+    if formats is not None:
+        strict = 0
+        invalid = 0
+        for row, row_runs in zip(rows, runs_by_row):
+            parsed = formats.get(row["key"], "parsed") == "parsed"
+            invalid += not parsed
+            for run in row_runs:
+                if run is not None and run.segments[0].reward == 1.0 and parsed:
+                    strict += 1
+        metrics["dev/strict_accuracy"] = strict / len(runs) if runs else 0.0
+        metrics["dev/invalid_ratio"] = invalid / len(rows) if rows else 0.0
+        metrics["dev/incorrect_ratio"] = (
+            sum(1 for row, row_runs in zip(rows, runs_by_row)
+                for run in row_runs
+                if run is not None and run.segments[0].reward != 1.0
+                and formats.get(row["key"], "parsed") == "parsed") / len(runs)
+        ) if runs else 0.0
+        formats.clear()
+    return metrics
+
+
+def thinking_text(message: Any) -> str:
+    """The reasoning part of a sampled message (empty when the reply has no thinking part)."""
+    content = message.get("content") if isinstance(message, dict) else None
+    if not isinstance(content, list):
+        return ""
+    return "".join(part.get("thinking", "") for part in content if part.get("type") == "thinking")
+
+
+class FormatTracker:
+    """Counts malformed training answers, writes a snapshot per window, and alerts on a high rate.
+
+    Snapshots go into metrics.jsonl (records have `type: format` and no `step`, so the cookbook's
+    per-step records are unaffected).
+    """
+
+    def __init__(self, metrics_path: Path, window: int = FORMAT_SNAPSHOT_EVERY, alert_rate: float = 0.05) -> None:
+        self.metrics_path = metrics_path
+        self.window = window
+        self.alert_rate = alert_rate
+        self.total = 0
+        self.window_total = 0
+        self.window_malformed = 0
+        self._lock = threading.Lock()
+
+    def record(self, well_formed: bool) -> None:
+        with self._lock:
+            self.total += 1
+            self.window_total += 1
+            if not well_formed:
+                self.window_malformed += 1
+            if self.total % self.window == 0:
+                self._flush_window()
+
+    def flush(self) -> None:
+        with self._lock:
+            if self.window_total:
+                self._flush_window()
+
+    def _flush_window(self) -> None:  # caller holds the lock
+        rate = self.window_malformed / self.window_total
+        record = {
+            "type": "format",
+            "rollouts_total": self.total,
+            "window_rollouts": self.window_total,
+            "format/malformed": self.window_malformed,
+            "format/malformed_rate": rate,
+        }
+        self.metrics_path.parent.mkdir(parents=True, exist_ok=True)
+        with self.metrics_path.open("a") as fh:
+            fh.write(json.dumps(record) + "\n")
+        if rate > self.alert_rate:
+            print(
+                f"ALERT: {rate:.1%} of the last {self.window_total} training answers are malformed "
+                f"(not exactly one label word; threshold {self.alert_rate:.0%})",
+                flush=True,
+            )
+        self.window_total = 0
+        self.window_malformed = 0
 
 
 class RolloutLog:
@@ -122,7 +217,14 @@ class RolloutLog:
             fh.write(line)
 
 
-def make_rollout_fn(setup: Any, *, renderer_name: str = "", rollout_log: Optional[RolloutLog] = None) -> Any:
+def make_rollout_fn(
+    setup: Any,
+    *,
+    renderer_name: str = "",
+    rollout_log: Optional[RolloutLog] = None,
+    format_tracker: Optional[FormatTracker] = None,
+    eval_formats: Optional[dict[str, str]] = None,
+) -> Any:
     """Single-turn rollout: one sampled answer per call, graded by `label_reward`.
 
     `evaluation` is True for dev evaluation rollouts; each graded rollout is written to
@@ -142,14 +244,27 @@ def make_rollout_fn(setup: Any, *, renderer_name: str = "", rollout_log: Optiona
         async def grade(row_: dict, message: Any, _parse_success: bool) -> float:
             completion = get_text_content(message)
             reward = await asyncio.to_thread(label_reward, completion, row_["gold"])
+            well_formed = is_well_formed(completion)
+            parse_status = unparsed_reason(completion) or "parsed"
+            if format_tracker is not None and not evaluation:
+                format_tracker.record(well_formed)
+            if eval_formats is not None and evaluation:
+                eval_formats[row_["key"]] = parse_status
             if rollout_log is not None:
+                pred = LabelParser().parse(completion)
+                thinking = thinking_text(message)
                 rollout_log.write({
                     "split": "eval" if evaluation else "train",
                     "key": row_["key"],
                     "gold": row_["gold"],
-                    "pred": LabelParser().parse(completion),
+                    "pred": pred,
                     "reward": reward,
+                    "well_formed": well_formed,
+                    "parse_status": parse_status,
+                    "outcome": "correct" if reward == 1.0 else ("incorrect" if well_formed else "invalid"),
                     "completion": completion,
+                    "thinking": thinking,
+                    "thinking_chars": len(thinking),
                 })
             return reward
 
@@ -188,7 +303,9 @@ def build_config(args: argparse.Namespace, n_rows: int) -> Any:
         learning_rate=args.learning_rate,
         completions_per_prompt=args.completions_per_prompt,
         prompt_groups_per_step=args.prompt_groups_per_step,
-        epochs=args.epochs,
+        epochs=args.epochs if args.max_steps is None else epochs_for_steps(
+            args.max_steps, args.prompt_groups_per_step, n_rows, args.epochs
+        ),
         max_rows=n_rows,
         max_completion_tokens=args.max_completion_tokens,
         temperature=args.temperature,
@@ -227,19 +344,107 @@ def resolve_training_shape(args: argparse.Namespace) -> str:
     return shape
 
 
-def print_eval(evaluation_fn: Any) -> Any:
-    """Print each dev evaluation as a JSON line.
+class StopAtStep(BaseException):
+    """Ends training after the requested step. A BaseException, so the cookbook's eval wrapper does not catch it."""
+
+    def __init__(self, step: int) -> None:
+        super().__init__(f"stopped at step {step}")
+        self.step = step
+
+
+def print_eval(evaluation_fn: Any, max_steps: Optional[int] = None) -> Any:
+    """Print each dev evaluation as a JSON line, and stop training at `max_steps`.
 
     The cookbook sends evaluation metrics only to W&B and to COOKBOOK_METRICS_FILE, so without
-    a W&B login they would be dropped silently.
+    a W&B login they would be dropped silently. The stop happens here because the eval hook runs
+    after the step's checkpoint is saved; the cookbook's cleanup still runs on the way out.
     """
 
     async def wrapped(step: int, rollout_fn: Any) -> dict[str, float]:
         metrics = await evaluation_fn(step, rollout_fn)
         print(json.dumps({"type": "eval", "step": step, **metrics}), flush=True)
+        if max_steps is not None and step >= max_steps:
+            from training.utils.logging import log_metrics
+
+            log_metrics(metrics, step=step)  # the cookbook would log this after the hook returns
+            raise StopAtStep(step)
         return metrics
 
     return wrapped
+
+
+TRAINER_JOB_FILE = "trainer_job.json"  # trainer job id, needed to list and promote checkpoints later
+_INTERMEDIATE_NAME = re.compile(r"step-\d+")
+
+
+def is_intermediate_checkpoint(name: str) -> bool:
+    """Periodic checkpoints are named step-N; the final one is saved separately and already promotable."""
+    return _INTERMEDIATE_NAME.fullmatch(name) is not None
+
+
+HOTLOAD_REQUEST_TIMEOUT_S = 900  # the SDK's default is 60 s, too short for the first base-snapshot hotload
+
+
+def install_hotload_timeout_patch() -> None:
+    """Raise the default timeout of DeploymentManager.hotload, which hotload_and_wait never overrides.
+
+    Without this, the first weight sync (a full base snapshot) times out after 60 s with a ReadTimeout
+    and the run fails after its trainer and deployment are already running. The installed SDK is not modified.
+    """
+    from fireworks.training.sdk.deployment import DeploymentManager
+
+    if getattr(DeploymentManager.hotload, "_anli_timeout_patched", False):
+        return
+    original = DeploymentManager.hotload
+
+    @functools.wraps(original)
+    def hotload(self: Any, *args: Any, **kwargs: Any) -> Any:
+        kwargs.setdefault("timeout", HOTLOAD_REQUEST_TIMEOUT_S)
+        return original(self, *args, **kwargs)
+
+    hotload._anli_timeout_patched = True
+    DeploymentManager.hotload = hotload
+
+
+def install_checkpoint_patches(log_dir: Path, promotable_checkpoints: bool) -> None:
+    """Runtime patches on the cookbook's TrainingCheckpoints. The installed cookbook files are not modified.
+
+    - Writes the trainer job id to `log_dir/trainer_job.json` when the trainer is created.
+    - With `promotable_checkpoints`, each intermediate save (step-N) also saves a promotable
+      base sampler snapshot, so it can be promoted to a model after the job finishes.
+      The cookbook's periodic save passes promotable=False; this overrides only that.
+    """
+    from training.utils import checkpoints as cp
+
+    if getattr(cp.TrainingCheckpoints, "_anli_patched", False):
+        return
+    original_init = cp.TrainingCheckpoints.__init__
+    original_save = cp.TrainingCheckpoints.save
+
+    def init(self: Any, *args: Any, **kwargs: Any) -> None:
+        original_init(self, *args, **kwargs)
+        trainer_id = kwargs.get("trainer_id")
+        if trainer_id:
+            log_dir.mkdir(parents=True, exist_ok=True)
+            (log_dir / TRAINER_JOB_FILE).write_text(json.dumps({"trainer_job_id": trainer_id}, indent=2))
+
+    def save(self: Any, name: str, *, resumable: bool, promotable: bool, data_consumed: Any = None) -> None:
+        if promotable_checkpoints and resumable and not promotable and is_intermediate_checkpoint(name):
+            promotable = True
+        return original_save(self, name, resumable=resumable, promotable=promotable, data_consumed=data_consumed)
+
+    cp.TrainingCheckpoints.__init__ = init
+    cp.TrainingCheckpoints.save = save
+    cp.TrainingCheckpoints._anli_patched = True
+
+
+def epochs_for_steps(max_steps: int, prompt_groups_per_step: int, n_rows: int, epochs: int) -> int:
+    """Passes over the rows that leave room for `max_steps` optimizer steps, with a 3x margin.
+
+    Groups rejected by the zero-variance filter also use row draws, so the margin covers them.
+    """
+    needed = math.ceil(3 * max_steps * prompt_groups_per_step / n_rows)
+    return max(epochs, needed)
 
 
 def run_rl(args: argparse.Namespace) -> dict[str, Any]:
@@ -262,22 +467,38 @@ def run_rl(args: argparse.Namespace) -> dict[str, Any]:
     os.environ["COOKBOOK_METRICS_FILE"] = str(log_dir / METRICS_FILE)
     write_run_config(args, log_dir, rows, dev_rows)
     rollout_log = RolloutLog(log_dir / ROLLOUTS_FILE)
+    format_tracker = FormatTracker(log_dir / METRICS_FILE, alert_rate=args.format_alert_rate)
+    install_checkpoint_patches(log_dir, args.promotable_checkpoints)
+    install_hotload_timeout_patch()
+    eval_formats: dict[str, str] = {}  # answer format per dev row, filled by the eval rollouts
 
     evaluation_fn = print_eval(
-        make_heldout_evaluation(
+        max_steps=args.max_steps,
+        evaluation_fn=make_heldout_evaluation(
             dev_rows,
             samples_per_row=1,
-            metrics_fn=dev_accuracy,
+            metrics_fn=functools.partial(dev_accuracy, formats=eval_formats),
             max_concurrency=args.concurrency,
         )
     )
-    return main(
-        config,
-        rollout_fn_factory=functools.partial(make_rollout_fn, rollout_log=rollout_log),
-        rows=rows,
-        evaluation_fn=evaluation_fn,
-        evaluation_interval=args.eval_interval,
-    )
+    try:
+        result = main(
+            config,
+            rollout_fn_factory=functools.partial(
+                make_rollout_fn, rollout_log=rollout_log, format_tracker=format_tracker, eval_formats=eval_formats
+            ),
+            rows=rows,
+            evaluation_fn=evaluation_fn,
+            evaluation_interval=args.eval_interval,
+        )
+    except StopAtStep as stop:
+        result = {"steps": stop.step}
+        print(f"Stopped at step {stop.step} (--max-steps {args.max_steps})")
+    format_tracker.flush()
+    # The cookbook saves the final checkpoint as step-<global_step> when any step was trained.
+    final_checkpoint = f"step-{result['steps']}" if result.get("steps") else None
+    write_summary(log_dir, final_checkpoint)
+    return result
 
 
 def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
@@ -298,10 +519,18 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     parser.add_argument("--max-completion-tokens", type=int, default=MAX_COMPLETION_TOKENS)
     parser.add_argument("--lora-rank", type=int, default=0, help="0 = full-parameter")
     parser.add_argument("--checkpoint-interval", type=int, default=DCP_SAVE_INTERVAL)
+    parser.add_argument(
+        "--promotable-checkpoints", action=argparse.BooleanOptionalAction, default=True,
+        help="also save each intermediate checkpoint as a promotable model (default on; --no-... to disable)",
+    )
     parser.add_argument("--dev-rows", type=int, default=200, help="fixed dev_r3 subset for evaluation")
     parser.add_argument("--dev-seed", type=int, default=0)
     parser.add_argument("--eval-interval", type=int, default=5, help="evaluate on dev every N optimizer steps")
+    parser.add_argument("--max-steps", type=int, default=None,
+                        help="stop after this many optimizer steps (multiple of the checkpoint and eval intervals)")
     parser.add_argument("--concurrency", type=int, default=32, help="max concurrent dev rollouts")
+    parser.add_argument("--format-alert-rate", type=float, default=0.05,
+                        help="alert when this share of recent training answers breaks the one-word format")
     parser.add_argument("--log-path", default="./anli-rl-logs")
     parser.add_argument("--output-model-id", default=None, help="promote the final checkpoint to this id")
     parser.add_argument("--skip-cleanup", action="store_true", help="keep trainer and deployment running")
@@ -314,6 +543,12 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
         parser.error("--epochs must be at least 1")
     if args.eval_interval < 1:
         parser.error("--eval-interval must be at least 1")
+    if args.max_steps is not None:
+        if args.max_steps < 1:
+            parser.error("--max-steps must be at least 1")
+        if args.max_steps % args.checkpoint_interval or args.max_steps % args.eval_interval:
+            parser.error("--max-steps must be a multiple of --checkpoint-interval and --eval-interval, "
+                         "so the stop step is checkpointed and evaluated")
     return args
 
 

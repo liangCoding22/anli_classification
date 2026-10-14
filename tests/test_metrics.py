@@ -59,3 +59,22 @@ def test_pass_at_k_skips_examples_with_too_few_samples():
     m = MetricsCalculator().compute(preds)["pass_at_k"]
     assert m["pass@1"] == pytest.approx(0.5)
     assert m["pass@3"] is None
+
+
+def test_strict_accuracy_counts_malformed_answers_as_wrong():
+    from anli_classification.metrics import MetricsCalculator
+    from anli_classification.schemas import Prediction
+
+    def pred(gold, pred_label, raw):
+        return Prediction(key=f"k{raw}", gold=gold, pred=pred_label, raw=raw)
+
+    predictions = [
+        pred(1, 1, "neutral"),  # exact, correct
+        pred(0, 0, "entailment\n\nThe premise implies it."),  # label then text: well formed
+        pred(2, 2, "contradiction\n\nWait, the earlier analysis said neutral."),  # several labels
+        pred(1, 1, "The answer is neutral."),  # label not first
+    ]
+    m = MetricsCalculator().compute(predictions)
+    assert m["accuracy"] == 4 / 4  # first-match scoring, unchanged
+    assert m["malformed"] == 3  # label then text, several labels, label not first
+    assert m["strict_accuracy"] == 1 / 4  # only the exact reply counts

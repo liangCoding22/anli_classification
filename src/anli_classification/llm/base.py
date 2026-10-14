@@ -11,6 +11,7 @@ class ChatRequest:
     max_tokens: int
     temperature: float = 0.0
     top_p: float = 1.0
+    top_k: Optional[int] = None  # None leaves the server default; 0 disables top-k
 
 
 @dataclass(frozen=True)

@@ -66,3 +66,13 @@ def test_failed_batch_job_still_saves_job_record(tmp_path, monkeypatch):
         backend.complete([ChatRequest("a", [], 8)])
     job_dirs = list(tmp_path.iterdir())
     assert len(job_dirs) == 1 and (job_dirs[0] / "job.json").exists()
+
+
+def test_batch_row_sends_top_k_only_when_set():
+    from anli_classification.llm.base import ChatRequest
+    from anli_classification.llm.fireworks import build_batch_jsonl
+
+    with_k = json.loads(build_batch_jsonl([ChatRequest(key="k", messages=[], max_tokens=8, top_k=0)]))["body"]
+    without = json.loads(build_batch_jsonl([ChatRequest(key="k", messages=[], max_tokens=8)]))["body"]
+    assert with_k["top_k"] == 0
+    assert "top_k" not in without

@@ -35,6 +35,7 @@ def build_classifier(config: RunConfig) -> NliClassifier:
         max_tokens=config.max_tokens,
         temperature=config.temperature,
         top_p=config.top_p,
+        top_k=config.top_k,
     )
 
 
@@ -51,6 +52,7 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> RunConfig:
     parser.add_argument("--samples", type=int, default=1, help="answers per example; 3 gives pass@3")
     parser.add_argument("--temperature", type=float, default=0.6, help="must be > 0 for --samples > 1")
     parser.add_argument("--top-p", type=float, default=0.95, help="nucleus sampling cutoff")
+    parser.add_argument("--top-k", type=int, default=None, help="top-k cutoff; 0 disables it")
     parser.add_argument("--concurrency", type=int, default=8)
     parser.add_argument("--batch-size", type=int, default=256)
     parser.add_argument("--account-id", default=None)
@@ -70,6 +72,7 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> RunConfig:
         samples=args.samples,
         temperature=args.temperature,
         top_p=args.top_p,
+        top_k=args.top_k,
         concurrency=args.concurrency,
         batch_size=args.batch_size,
         account_id=args.account_id,
