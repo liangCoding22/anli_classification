@@ -8,3 +8,4 @@ __pycache__/
 .vscode/
 outputs/
 *.egg-info/
+anli-rl-logs/

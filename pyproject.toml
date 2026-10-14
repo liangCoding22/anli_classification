@@ -20,6 +20,8 @@ dev = ["pytest>=8.0"]
 [project.scripts]
 anli-eval = "anli_classification.cli:main"
 anli-batch-report = "anli_classification.batch_report:main"
+anli-training-pool = "anli_classification.training_pool:main"
+anli-rl-train = "anli_classification.rl_train:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
