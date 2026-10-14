@@ -20,6 +20,7 @@ import requests
 from openai import OpenAI
 
 from anli_classification.llm.base import ChatRequest, ChatResult
+from anli_classification.parsers import split_reasoning
 
 FIREWORKS_INFERENCE_URL = "https://api.fireworks.ai/inference/v1"
 FIREWORKS_API_URL = "https://api.fireworks.ai/v1"
@@ -61,6 +62,8 @@ class FireworksChatBackend:
             return list(pool.map(self._complete_one, chat_requests))
 
     def _complete_one(self, request: ChatRequest) -> ChatResult:
+        if request.prompt is not None:
+            return self._complete_rendered(request)
         try:
             response = self._client.chat.completions.create(
                 model=self.model,
@@ -77,6 +80,22 @@ class FireworksChatBackend:
                 message.content or "",
                 reasoning=reasoning or "",
             )
+        except Exception as exc:  # SDK already retried transient failures
+            return ChatResult(request.key, "", f"{type(exc).__name__}: {exc}")
+
+    def _complete_rendered(self, request: ChatRequest) -> ChatResult:
+        """A client-rendered prompt goes to /completions, so no server chat template applies."""
+        try:
+            response = self._client.completions.create(
+                model=self.model,
+                prompt=request.prompt,
+                max_tokens=request.max_tokens,
+                temperature=request.temperature,
+                top_p=request.top_p,
+                **({"extra_body": {"top_k": request.top_k}} if request.top_k is not None else {}),
+            )
+            reasoning, text = split_reasoning(response.choices[0].text or "")
+            return ChatResult(request.key, text, reasoning=reasoning)
         except Exception as exc:  # SDK already retried transient failures
             return ChatResult(request.key, "", f"{type(exc).__name__}: {exc}")
 
@@ -117,11 +136,12 @@ def parse_batch_results(text: str) -> dict[str, ChatResult]:
             results[key] = ChatResult(key, "", "no choices in batch response")
             continue
         message = choices[0]["message"]
-        results[key] = ChatResult(
-            key,
-            message.get("content") or "",
-            reasoning=message.get("reasoning_content") or message.get("reasoning") or "",
-        )
+        text = message.get("content") or ""
+        reasoning = message.get("reasoning_content") or message.get("reasoning") or ""
+        if not reasoning:
+            # A model served without a reasoning parser returns its thinking inline.
+            reasoning, text = split_reasoning(text)
+        results[key] = ChatResult(key, text, reasoning=reasoning)
     return results
 
 

@@ -558,10 +558,11 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
     print(f"RL training finished. Final metrics: {metrics}")
     if args.output_model_id:
         # Dev only: anli-eval defaults to dev and test, so the split is passed explicitly.
+        # --template client: the promoted model's server template disables thinking (rendering.py).
         print(
             "Evaluate on dev (not test) once the model is deployed:\n"
             f"  anli-eval --model accounts/<account>/models/{args.output_model_id} "
-            "--splits dev --rounds r1 r2 r3"
+            f"--splits dev --rounds r1 r2 r3 --template client --tokenizer-model {args.tokenizer_model}"
         )
 
 

@@ -16,6 +16,7 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest>=8.0"]
+template = ["transformers>=4.51", "jinja2>=3.1"]  # anli-eval --template client
 
 [project.scripts]
 anli-eval = "anli_classification.cli:main"

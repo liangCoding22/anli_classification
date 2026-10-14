@@ -37,6 +37,20 @@ def unparsed_reason(text: Optional[str]) -> Optional[str]:
     return None
 
 
+def split_reasoning(text: str) -> tuple[str, str]:
+    """(reasoning, answer) for a reply that is one leading `<think>...</think>` block plus an answer.
+
+    Raw completions keep the thinking inline, where the chat API would have moved it to a separate
+    field; this gives them the same shape. Any other reply comes back as ('', text) unchanged, so
+    `unparsed_reason` still sees the malformed tags.
+    """
+    tags = [m.group(0) for m in _TAG.finditer(text)]
+    if tags != [THINK_OPEN, THINK_CLOSE] or not text.lstrip().startswith(THINK_OPEN):
+        return "", text
+    reasoning, answer = text.lstrip()[len(THINK_OPEN):].split(THINK_CLOSE, 1)
+    return reasoning, answer
+
+
 def parse_answer(text: Optional[str]) -> Optional[int]:
     """Label id of the final answer when it is exactly one label word (case-insensitive), else None."""
     if unparsed_reason(text) is not None:

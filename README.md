@@ -62,6 +62,29 @@ anli-eval --samples 3 --splits dev --rounds r3 --limit 1000
 Sample 0 keeps the plain example key; extra samples are keyed `<key>#1`, `<key>#2`.
 Output files are unchanged, and each sample is a line in the slice's JSONL.
 
+### 5. Evaluating promoted RL checkpoints (`--template client`)
+
+A promoted RL checkpoint is not served with the base model's chat template: Fireworks registers
+it with `useHfApplyChatTemplate: false`, and its built-in qwen3 template prefills an empty
+`<think></think>`, which turns thinking off. RL trained and evaluated with thinking on, so a
+plain `anli-eval` of the promoted model scores a different model (dev_r3: 0.42 vs 0.72 in-loop).
+
+`--template client` renders the prompt locally with the HF tokenizer's chat template (thinking
+on, the same tokens as training) and sends it to `/completions`, so no server template applies.
+Results go to `<prompt-version>-client-template/`. It needs the chat backend against a deployment
+of the model. The batch API cannot do it: it takes only `messages` (`prompt_token_ids` rows fail
+with HTTP 400), and for a promoted model it ignores `chat_template_kwargs` and rejects
+`reasoning_effort` ("non-reasoning model").
+
+```bash
+pip install -e ".[template]"
+anli-eval --model accounts/<account>/models/<promoted-id> \
+    --splits dev --rounds r3 --limit 200 --template client --tokenizer-model Qwen/Qwen3-4B
+```
+
+`anli-eval` and `anli-batch-report` print a warning when no reply in a slice has reasoning;
+`metrics.json` counts these replies as `with_reasoning`.
+
 ### Outputs and versioning
 
 Everything for one model and one prompt version lands in one directory:
@@ -87,7 +110,8 @@ outputs/<model-slug>/<prompt-version>/
   further variants; don't edit an existing prompt's wording.
   Model changes get a new slug directory automatically.
 - **Resuming:** runs read the slice JSONL files first. Successful predictions are kept,
-  and failed ones (errors, empty replies) are retried.
+  and failed requests (API errors, rows missing from a batch) are retried. An empty reply
+  (thinking used up `--max-tokens`) is an answer and counts as wrong, as in RL; it is not retried.
 - **Caveat:** `anli-batch-report` files results under the *current* prompt version. If the
   job used an older prompt, check the job's `input.jsonl` before trusting that directory.
 

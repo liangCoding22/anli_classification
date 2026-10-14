@@ -5,14 +5,15 @@ from pathlib import Path
 from typing import Optional, Sequence
 
 from anli_classification.classifier import NliClassifier
-from anli_classification.config import DEFAULT_MODEL, RunConfig
+from anli_classification.config import DEFAULT_MODEL, TEMPLATES, RunConfig
 from anli_classification.data import AnliDataset, DEFAULT_SPLITS, ROUNDS, SPLITS
 from anli_classification.evaluator import Evaluator
 from anli_classification.llm.base import ChatBackend
 from anli_classification.llm.fireworks import FireworksBatchBackend, FireworksChatBackend
-from anli_classification.metrics import MetricsCalculator, format_metrics_line
+from anli_classification.metrics import MetricsCalculator, format_metrics_line, no_reasoning_warning
 from anli_classification.parsers import LabelParser
 from anli_classification.prompts import PROMPTS, NliPromptV3
+from anli_classification.rendering import DEFAULT_TOKENIZER_MODEL, ChatTemplateRenderer
 
 
 def build_backend(config: RunConfig) -> ChatBackend:
@@ -36,6 +37,7 @@ def build_classifier(config: RunConfig) -> NliClassifier:
         temperature=config.temperature,
         top_p=config.top_p,
         top_k=config.top_k,
+        renderer=ChatTemplateRenderer(config.tokenizer_model) if config.template == "client" else None,
     )
 
 
@@ -57,9 +59,20 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> RunConfig:
     parser.add_argument("--batch-size", type=int, default=256)
     parser.add_argument("--account-id", default=None)
     parser.add_argument("--output-dir", default="outputs")
+    parser.add_argument(
+        "--template", choices=TEMPLATES, default="server",
+        help="'client': apply the HF chat template locally with thinking on, as RL training did, "
+             "and call /completions (chat backend only). For promoted RL checkpoints, whose "
+             "server template disables thinking",
+    )
+    parser.add_argument("--tokenizer-model", default=DEFAULT_TOKENIZER_MODEL,
+                        help="HF tokenizer whose chat template --template client applies")
     args = parser.parse_args(argv)
     if args.samples < 1:
         parser.error("--samples must be at least 1")
+    if args.template == "client" and args.backend == "batch":
+        parser.error("--template client needs --backend chat against a deployment: the batch API "
+                     "takes only chat messages, so the server's template always applies")
     return RunConfig(
         model=args.model,
         prompt_version=args.prompt_version,
@@ -77,6 +90,8 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> RunConfig:
         batch_size=args.batch_size,
         account_id=args.account_id,
         output_dir=Path(args.output_dir),
+        template=args.template,
+        tokenizer_model=args.tokenizer_model,
     )
 
 
@@ -98,6 +113,10 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
     report = evaluator.evaluate(slices)
     for name, m in report.items():
         print(format_metrics_line(name, m))
+    for name, m in report.items():
+        warning = no_reasoning_warning(name, m) if name != "overall" else None
+        if warning:
+            print(warning)
     print(f"Wrote {config.run_dir / 'metrics.json'}")
 
 

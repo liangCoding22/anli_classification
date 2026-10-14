@@ -18,7 +18,7 @@ def test_classify_batch_one_call_and_parsed_labels(examples):
     assert all(p.pred == 1 and p.ok for p in preds)
 
 
-def test_backend_error_and_empty_reply_become_failed_predictions(examples):
+def test_backend_error_is_failed_and_empty_reply_is_a_wrong_answer(examples):
     def reply(request):
         if request.key == examples[0].key:
             return ChatResult(request.key, "", "RateLimitError: slow down")
@@ -29,7 +29,7 @@ def test_backend_error_and_empty_reply_become_failed_predictions(examples):
     classifier, _ = make(reply)
     preds = classifier.classify_batch([(e.key, e) for e in examples[:3]])
     assert preds[0].error == "RateLimitError: slow down" and preds[0].pred is None
-    assert "empty reply" in preds[1].error and preds[1].pred is None
+    assert preds[1].ok and preds[1].pred is None  # scored as wrong, never retried
     assert preds[2].error == "no result returned"
 
 
@@ -48,4 +48,4 @@ def test_reasoning_is_kept_on_success_and_on_empty_reply(examples):
     classifier, _ = make(reply)
     ok, empty = classifier.classify_batch([(e.key, e) for e in examples[:2]])
     assert ok.reasoning == "thinking..." and ok.pred == 1
-    assert empty.error and empty.reasoning == "ran out of budget"
+    assert empty.ok and empty.pred is None and empty.reasoning == "ran out of budget"

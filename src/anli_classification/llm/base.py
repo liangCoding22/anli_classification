@@ -12,6 +12,10 @@ class ChatRequest:
     temperature: float = 0.0
     top_p: float = 1.0
     top_k: Optional[int] = None  # None leaves the server default; 0 disables top-k
+    # Set when the prompt was rendered client-side (rendering.py): the chat backend then sends it
+    # to /completions instead of `messages`, so the server's chat template is never applied.
+    # `messages` stays for the record. The batch API takes only `messages`.
+    prompt: Optional[str] = None
 
 
 @dataclass(frozen=True)

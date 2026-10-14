@@ -6,6 +6,7 @@ import re
 from typing import Optional
 
 from anli_classification.prompts import PROMPTS, NliPromptV3
+from anli_classification.rendering import DEFAULT_TOKENIZER_MODEL
 
 DEFAULT_MODEL = "accounts/fireworks/models/qwen3-4b"
 
@@ -15,9 +16,20 @@ def model_slug(model: str) -> str:
     return re.sub(r"[^A-Za-z0-9._-]+", "_", model.split("/")[-1])
 
 
-def run_dir_for(output_dir: Path, model: str, prompt_version: str = NliPromptV3.VERSION) -> Path:
-    """Where a model's predictions and metrics for one prompt version live."""
-    return output_dir / model_slug(model) / prompt_version
+TEMPLATES = ("server", "client")  # who applies the chat template; see rendering.py
+CLIENT_TEMPLATE_SUFFIX = "-client-template"
+
+
+def run_dir_for(
+    output_dir: Path, model: str, prompt_version: str = NliPromptV3.VERSION, template: str = "server"
+) -> Path:
+    """Where a model's predictions and metrics for one prompt version live.
+
+    Client-templated runs get their own directory: the model sees different prompt tokens, so
+    their cached predictions must never be reused for a server-templated run, or the reverse.
+    """
+    suffix = CLIENT_TEMPLATE_SUFFIX if template == "client" else ""
+    return output_dir / model_slug(model) / f"{prompt_version}{suffix}"
 
 
 @dataclass(frozen=True)
@@ -38,7 +50,9 @@ class RunConfig:
     batch_size: int = 256  # examples per chunk; one batch job per chunk
     account_id: Optional[str] = None  # batch backend only
     output_dir: Path = field(default=Path("outputs"))
+    template: str = "server"  # "client": render prompts locally with the HF template, thinking on
+    tokenizer_model: str = DEFAULT_TOKENIZER_MODEL  # HF tokenizer for template="client"
 
     @property
     def run_dir(self) -> Path:
-        return run_dir_for(self.output_dir, self.model, self.prompt_version)
+        return run_dir_for(self.output_dir, self.model, self.prompt_version, self.template)

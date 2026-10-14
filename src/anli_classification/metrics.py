@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from math import comb
-from typing import Any, Sequence
+from typing import Any, Optional, Sequence
 
 from anli_classification.parsers import is_well_formed
 from anli_classification.schemas import LABELS, NUM_LABELS, Prediction, example_key_of
@@ -38,6 +38,22 @@ def format_metrics_line(name: str, m: dict[str, Any]) -> str:
         if name_.startswith("pass@") and value is not None:
             line += f" {name_}={value:.4f}"
     return line
+
+
+def no_reasoning_warning(name: str, m: dict[str, Any]) -> Optional[str]:
+    """A warning when no reply in a slice reasoned, else None.
+
+    Qwen3 reasons by default, so zero reasoning means the server's chat template put the model in
+    non-thinking mode, as it does for promoted RL checkpoints. Such a score does not compare with
+    the RL run's own dev evaluation.
+    """
+    answered = m["n"] - m["errors"]
+    if answered == 0 or m.get("with_reasoning", 0) > 0:
+        return None
+    return (
+        f"WARNING {name}: none of {answered} replies has reasoning; the server template likely "
+        "disabled thinking. For an RL checkpoint, re-run with --template client to match training."
+    )
 
 
 def is_malformed(prediction: Prediction) -> bool:
@@ -83,6 +99,7 @@ class MetricsCalculator:
             "macro_f1": f1_total / NUM_LABELS,
             "unparsed": sum(p.pred is None for p in predictions),
             "errors": sum(not p.ok for p in predictions),
+            "with_reasoning": sum(p.ok and bool(p.reasoning.strip()) for p in predictions),
             "per_class": per_class,
             "confusion": {"rows_gold_cols_pred": LABELS, "matrix": matrix},
             "pass_at_k": pass_at_k(predictions),

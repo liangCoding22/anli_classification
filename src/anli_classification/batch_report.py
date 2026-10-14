@@ -26,7 +26,7 @@ from anli_classification.config import run_dir_for
 from anli_classification.data import AnliDataset
 from anli_classification.llm.base import ChatResult
 from anli_classification.llm.fireworks import FireworksBatchBackend, job_state, parse_batch_results
-from anli_classification.metrics import MetricsCalculator, format_metrics_line
+from anli_classification.metrics import MetricsCalculator, format_metrics_line, no_reasoning_warning
 from anli_classification.parsers import LabelParser
 from anli_classification.prompts import PROMPTS, NliPromptV3
 from anli_classification.schemas import Example, Prediction, example_key_of
@@ -149,6 +149,7 @@ class BatchJobReporter:
                     "macro_f1": m["macro_f1"],
                     "errors": m["errors"],
                     "unparsed": m["unparsed"],
+                    "with_reasoning": m["with_reasoning"],
                     "pass_at_k": m["pass_at_k"],
                 }
                 for name, m in slice_metrics.items()
@@ -185,6 +186,10 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
     summary = reporter.report(job_id)
     for name, m in summary["metrics"].items():
         print(format_metrics_line(name, m))
+    for name, m in summary["metrics"].items():
+        warning = no_reasoning_warning(name, m) if name != "overall" else None
+        if warning:
+            print(warning)
     print(f"Wrote batch report to {summary['predictions_dir']}/batch_jobs/{job_id}/")
 
 
