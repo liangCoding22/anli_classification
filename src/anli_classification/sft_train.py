@@ -158,8 +158,9 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
     from recipes.sft_loop import main as run_sft
 
     check_training_shape(args.training_shape, args.lora_rank, args.max_seq_len)
-    # Writes the trainer job id to <log-path>/trainer_job.json and makes the saves promotable.
-    install_checkpoint_patches(args.log_path, promotable_checkpoints=True)
+    # Writes the trainer job id to <log-path>/trainer_job.json. promotable_checkpoints stays off: the
+    # epoch-end saves are already promotable (sampler_due), so the patch's extra promotion does nothing here.
+    install_checkpoint_patches(args.log_path, promotable_checkpoints=False)
     result = run_sft(build_config(args, summary["train_rows"]))
     job = {
         "job_id": result["job_id"],
