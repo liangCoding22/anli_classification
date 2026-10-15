@@ -61,6 +61,22 @@ def test_pass_at_k_skips_examples_with_too_few_samples():
     assert m["pass@3"] is None
 
 
+def test_maj_at_k_majority_vote_and_ties():
+    from anli_classification.metrics import maj_at_k
+
+    preds = [
+        sample("dev_r1/A", 0, 0), sample("dev_r1/A#1", 0, 1), sample("dev_r1/A#2", 0, 1),  # vote 1, gold 0
+        sample("dev_r1/B", 1, 1), sample("dev_r1/B#1", 1, 1), sample("dev_r1/B#2", 1, 0),  # vote 1, gold 1
+        sample("dev_r1/D", 0, 0), sample("dev_r1/D#1", 0, 1),  # 2 samples: tie {0, 1}, gold 0
+    ]
+    m = maj_at_k(preds, ks=(1, 2, 3))
+    assert m["examples"] == 3
+    assert m["maj@1"] == pytest.approx(1.0)  # first sample correct for A, B, D
+    assert m["maj@2"] == pytest.approx((0.5 + 1 + 0.5) / 3)  # A: tie on first two, B: both 1, D: tie
+    assert m["maj@3"] == pytest.approx((0 + 1) / 2)  # only A and B have three samples
+    assert maj_at_k(preds, ks=(8,))["maj@8"] is None
+
+
 def test_strict_accuracy_counts_malformed_answers_as_wrong():
     from anli_classification.metrics import MetricsCalculator
     from anli_classification.schemas import Prediction

@@ -1,10 +1,11 @@
 from __future__ import annotations
 
+from collections import Counter
 from math import comb
 from typing import Any, Optional, Sequence
 
 from anli_classification.parsers import is_well_formed
-from anli_classification.schemas import LABELS, NUM_LABELS, Prediction, example_key_of
+from anli_classification.schemas import LABELS, NUM_LABELS, SAMPLE_SEP, Prediction, example_key_of
 
 
 def pass_at_k(predictions: Sequence[Prediction], ks: Sequence[int] = (1, 3, 5, 8)) -> dict[str, Any]:
@@ -28,14 +29,45 @@ def pass_at_k(predictions: Sequence[Prediction], ks: Sequence[int] = (1, 3, 5, 8
     return result
 
 
+def maj_at_k(predictions: Sequence[Prediction], ks: Sequence[int] = (1, 3, 5, 8)) -> dict[str, Any]:
+    """Majority-vote accuracy over the first k samples of each example (maj@k).
+
+    The label predicted most often among the first k samples (by sample index) is the vote. An
+    unparsed or errored sample casts no vote. A tie splits the score evenly among the tied labels,
+    so it scores 1/len(tied) when the gold label is among them. Examples with fewer than k samples
+    are left out of that k.
+    """
+    samples_by_example: dict[str, list[tuple[int, Optional[int], int]]] = {}
+    for p in predictions:
+        key, _, index = p.key.partition(SAMPLE_SEP)
+        samples_by_example.setdefault(key, []).append((int(index) if index else 0, p.pred if p.ok else None, p.gold))
+
+    result: dict[str, Any] = {"examples": len(samples_by_example)}
+    for k in ks:
+        scores = []
+        for samples in samples_by_example.values():
+            if len(samples) < k:
+                continue
+            first = sorted(samples)[:k]
+            votes = Counter(pred for _, pred, _ in first if pred is not None)
+            if not votes:
+                scores.append(0.0)
+                continue
+            top = max(votes.values())
+            tied = [label for label, count in votes.items() if count == top]
+            scores.append(1 / len(tied) if first[0][2] in tied else 0.0)
+        result[f"maj@{k}"] = sum(scores) / len(scores) if scores else None
+    return result
+
+
 def format_metrics_line(name: str, m: dict[str, Any]) -> str:
     """One console line summarising a slice's metrics dict (from MetricsCalculator.compute)."""
     line = (
         f"{name:10s} n={m['n']:5d} acc={m['accuracy']:.4f} strict_acc={m['strict_accuracy']:.4f} "
         f"macro_f1={m['macro_f1']:.4f} malformed={m['malformed']} unparsed={m['unparsed']} errors={m['errors']}"
     )
-    for name_, value in m.get("pass_at_k", {}).items():
-        if name_.startswith("pass@") and value is not None:
+    for name_, value in {**m.get("pass_at_k", {}), **m.get("maj_at_k", {})}.items():
+        if name_.startswith(("pass@", "maj@")) and value is not None:
             line += f" {name_}={value:.4f}"
     return line
 
@@ -103,4 +135,5 @@ class MetricsCalculator:
             "per_class": per_class,
             "confusion": {"rows_gold_cols_pred": LABELS, "matrix": matrix},
             "pass_at_k": pass_at_k(predictions),
+            "maj_at_k": maj_at_k(predictions),
         }
