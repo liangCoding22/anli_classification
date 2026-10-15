@@ -4,8 +4,10 @@ Each trace becomes three messages, with the prompt built exactly as the eval bui
 
 - system: NliPromptV3.SYSTEM
 - user: NliPromptV3.USER with the premise and hypothesis filled in
-- assistant: "<think>\\n{reasoning}\\n</think>\\n\\n{label}"
+- assistant: content = the label, reasoning_content = the thinking (the text between <think> and </think>)
 
+The cookbook's data path turns reasoning_content into a thinking part, and the Qwen3 renderer then
+writes "<think>\\n{reasoning}\\n</think>\\n\\n{label}", the same tokens as a literal <think> string.
 The reasoning is stripped so the template's own newlines are not doubled.
 """
 
@@ -26,13 +28,6 @@ SFT_FILE = "train_sft.jsonl"
 SUMMARY_FILE = "summary.json"
 
 
-def assistant_content(reasoning: str, label: str) -> str:
-    thinking = reasoning.strip()
-    if not thinking:
-        raise ValueError("trace has no reasoning; SFT needs the thinking in the assistant turn")
-    return f"<think>\n{thinking}\n</think>\n\n{label}"
-
-
 def to_messages(record: dict[str, Any]) -> list[dict[str, str]]:
     example = Example(
         split="train",
@@ -43,8 +38,11 @@ def to_messages(record: dict[str, Any]) -> list[dict[str, str]]:
         label=record["gold"],
         reason=record["reason"],
     )
+    thinking = record["trace"]["reasoning"].strip()
+    if not thinking:
+        raise ValueError("trace has no reasoning; SFT needs the thinking in the assistant turn")
     messages = NliPromptV3().build(example)
-    messages.append({"role": "assistant", "content": assistant_content(record["trace"]["reasoning"], record["label"])})
+    messages.append({"role": "assistant", "content": record["label"], "reasoning_content": thinking})
     return messages
 
 
