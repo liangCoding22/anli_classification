@@ -20,7 +20,7 @@ from pathlib import Path
 from typing import Any, Optional, Sequence
 
 from anli_classification.prompts import NliPromptV3
-from anli_classification.schemas import Example
+from anli_classification.schemas import LABELS, Example
 
 DEFAULT_TRACES = Path("outputs/qwen3-4b/zero-shot-v3/training_data/train_traces.jsonl")
 DEFAULT_OUTPUT = Path("outputs/qwen3-4b/zero-shot-v3/sft_data")
@@ -29,6 +29,7 @@ SUMMARY_FILE = "summary.json"
 
 
 def to_messages(record: dict[str, Any]) -> list[dict[str, str]]:
+    """Messages for one trace. The assistant label is the original gold label, not the parsed answer."""
     example = Example(
         split="train",
         round_id="r3",
@@ -38,12 +39,22 @@ def to_messages(record: dict[str, Any]) -> list[dict[str, str]]:
         label=record["gold"],
         reason=record["reason"],
     )
-    thinking = record["trace"]["reasoning"].strip()
-    if not thinking:
-        raise ValueError("trace has no reasoning; SFT needs the thinking in the assistant turn")
     messages = NliPromptV3().build(example)
-    messages.append({"role": "assistant", "content": record["label"], "reasoning_content": thinking})
+    messages.append({
+        "role": "assistant",
+        "content": LABELS[record["gold"]],
+        "reasoning_content": record["trace"]["reasoning"].strip(),
+    })
     return messages
+
+
+def skip_reason(record: dict[str, Any]) -> Optional[str]:
+    """Why a trace cannot be used for SFT, or None. Such traces are counted, not written."""
+    if not record["trace"]["reasoning"].strip():
+        return "empty_reasoning"
+    if record["trace"]["pred"] != LABELS[record["gold"]]:
+        return "pred_not_gold"
+    return None
 
 
 def build(
@@ -60,14 +71,24 @@ def build(
         r for r in records
         if not (r["category"] == "all_correct" and r["label"] in drop_all_correct_labels)
     ]
+    skipped: Counter = Counter()
+    kept = []
+    for record in records:
+        reason = skip_reason(record)
+        if reason:
+            skipped[reason] += 1
+        else:
+            kept.append(record)
+
     output_dir.mkdir(parents=True, exist_ok=True)
     with (output_dir / SFT_FILE).open("w") as f:
-        for record in records:
+        for record in kept:
             f.write(json.dumps({"messages": to_messages(record)}, ensure_ascii=False) + "\n")
     summary = {
         "traces": str(traces_path),
-        "examples": len(records),
-        "labels": dict(Counter(r["label"] for r in records)),
+        "examples": len(kept),
+        "labels": dict(Counter(r["label"] for r in kept)),
+        "skipped": dict(skipped),
         "dropped_all_correct": dict(dropped),
         "drop_all_correct_labels": list(drop_all_correct_labels),
         "prompt_version": NliPromptV3.VERSION,
