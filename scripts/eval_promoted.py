@@ -23,6 +23,7 @@ REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 SHAPE = "accounts/fireworks/deploymentShapes/rft-qwen3-4b"
 
 
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Deploy a promoted model and run anli-eval on it.")
     parser.add_argument("--promoted-model", required=True, help="accounts/<acct>/models/<promoted-id>")
@@ -34,6 +35,8 @@ def main() -> int:
     parser.add_argument("--temperature", type=float, default=0.6)
     parser.add_argument("--top-p", type=float, default=0.95)
     parser.add_argument("--tokenizer-model", default="Qwen/Qwen3-4B")
+    parser.add_argument("--output-dir", default="outputs", help="root for predictions and metrics")
+    parser.add_argument("--max-tokens", type=int, default=4096, help="generation limit per reply")
     parser.add_argument("--keep-deployment", action="store_true", help="do not delete the deployment afterwards")
     args = parser.parse_args()
 
@@ -51,10 +54,14 @@ def main() -> int:
     info = mgr.create_or_get(cfg)
     print("created:", info.name, info.state, flush=True)
     try:
-        mgr.wait_for_ready(args.deployment_id)
+        ready = mgr.wait_for_ready(args.deployment_id)
+        # The SDK's inference_model is just the deployment path, which does not address the
+        # promoted model. Fireworks wants "<model>#<deployment>" (as in the cookbook).
+        model = f"{args.promoted_model}#{ready.inference_model}"
+        print("ready:", ready.name, "serving as", model, flush=True)
         cmd = [
             sys.executable, "-m", "anli_classification.cli",
-            "--model", info.inference_model,
+            "--model", model,
             "--prompt-version", args.prompt_version,
             "--splits", *args.splits,
             "--rounds", *args.rounds,
@@ -62,6 +69,8 @@ def main() -> int:
             "--tokenizer-model", args.tokenizer_model,
             "--temperature", str(args.temperature),
             "--top-p", str(args.top_p),
+            "--output-dir", args.output_dir,
+            "--max-tokens", str(args.max_tokens),
         ]
         if args.limit is not None:
             cmd += ["--limit", str(args.limit)]

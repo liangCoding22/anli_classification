@@ -25,6 +25,19 @@ def test_parser_reads_only_the_answer_after_a_closed_think_block():
     assert parser.parse("<think>a</think>") is None  # no answer after the thinking
 
 
+def test_parser_accepts_a_lone_closing_think_tag():
+    # Thinking-only models (Qwen3 *-Thinking-2507): the template opens the block, so only </think> appears.
+    parser = LabelParser()
+    assert parser.parse("Let me think. It is neutral.\n</think>\n\nneutral") == 1
+    assert parser.parse("reasoning</think>") is None  # no answer after the thinking
+    assert parser.parse("a</think>neutral</think>neutral") is None  # two closing tags
+    assert parser.parse("a</think>neutral<think>b") is None
+    from anli_classification.parsers import split_reasoning
+    assert split_reasoning("why\n</think>\n\nentailment") == ("why\n", "\n\nentailment")
+    assert split_reasoning("<think>why</think>entailment") == ("why", "entailment")
+    assert split_reasoning("entailment") == ("", "entailment")
+
+
 def test_parser_returns_none_without_a_valid_answer():
     parser = LabelParser()
     assert parser.parse("") is None

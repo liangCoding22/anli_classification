@@ -25,7 +25,7 @@ def test_split_reasoning_moves_one_leading_think_block_out():
 
 
 def test_split_reasoning_leaves_malformed_replies_unchanged():
-    for text in ("<think>never closes entailment", "a</think>neutral", "<think>a</think>x<think>b</think>neutral"):
+    for text in ("<think>never closes entailment", "a</think>b</think>neutral", "<think>a</think>x<think>b</think>neutral"):
         assert split_reasoning(text) == ("", text)
 
 

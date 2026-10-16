@@ -19,15 +19,18 @@ def unparsed_reason(text: Optional[str]) -> Optional[str]:
     'empty_answer' (nothing after the thinking), 'not_one_label' (the answer is not exactly one label).
 
     Replies without thinking tags are their own answer; thinking separated by the API needs no tags.
+    A reply with a single closing tag and no opening one is the thinking-only shape (Qwen3 *-Thinking-2507,
+    Qwen3-Next thinking): the chat template already opened the block in the prompt, so only `</think>` appears.
     """
     if text is None or not text.strip():
         return "empty"
     tags = [m.group(0) for m in _TAG.finditer(text)]
-    for i, tag in enumerate(tags):
-        if tag != (THINK_OPEN if i % 2 == 0 else THINK_CLOSE):
-            return "unbalanced_think"
-    if len(tags) % 2:
-        return "unclosed_think"
+    if tags != [THINK_CLOSE]:  # a lone closing tag is the thinking-only shape, handled below
+        for i, tag in enumerate(tags):
+            if tag != (THINK_OPEN if i % 2 == 0 else THINK_CLOSE):
+                return "unbalanced_think"
+        if len(tags) % 2:
+            return "unclosed_think"
     answer = text.rsplit(THINK_CLOSE, 1)[1] if tags else text
     answer = answer.strip()
     if not answer:
@@ -40,11 +43,17 @@ def unparsed_reason(text: Optional[str]) -> Optional[str]:
 def split_reasoning(text: str) -> tuple[str, str]:
     """(reasoning, answer) for a reply that is one leading `<think>...</think>` block plus an answer.
 
+    A reply that has only the closing tag (`reasoning</think>answer`, the thinking-only models whose chat
+    template opens the block in the prompt) splits the same way: everything before the tag is the reasoning.
+
     Raw completions keep the thinking inline, where the chat API would have moved it to a separate
     field; this gives them the same shape. Any other reply comes back as ('', text) unchanged, so
     `unparsed_reason` still sees the malformed tags.
     """
     tags = [m.group(0) for m in _TAG.finditer(text)]
+    if tags == [THINK_CLOSE]:
+        reasoning, answer = text.split(THINK_CLOSE, 1)
+        return reasoning, answer
     if tags != [THINK_OPEN, THINK_CLOSE] or not text.lstrip().startswith(THINK_OPEN):
         return "", text
     reasoning, answer = text.lstrip()[len(THINK_OPEN):].split(THINK_CLOSE, 1)
