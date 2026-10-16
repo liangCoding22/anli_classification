@@ -55,6 +55,9 @@ MAX_COMPLETION_TOKENS = 4096
 DEV_ROWS = 1000  # about 330 per class, so per-class recall has a standard error near 2.6 points
 JUDGE_MODEL = "accounts/fireworks/models/gpt-oss-120b"  # serverless; tested on 120 real rollouts, 4 flagged, all genuine
 JUDGE_MAX_CHARS = 16000  # reasoning longer than this keeps its first 3000 and last 12000 characters
+REWARD_VERSIONS = ("v2", "v3")  # v2: the reward of the v2 run (kept as the default); v3: see training_reward
+MALFORMED_MARGIN = 0.25  # v3: a malformed answer scores this far below the worst parseable outcome
+NO_REASONING = "no_reasoning"  # verdict recorded for a parseable answer that has no reasoning text (v3)
 ADVANTAGE_STD_FLOOR = 0.2  # binary groups with >= 1 success in 16 have std >= 0.25, so only penalty-only groups are affected
 CLASS_DROP_ALERT = 0.05  # alert when a class's dev recall falls this far below the run's first evaluation
 DCP_SAVE_INTERVAL = 2  # resumable checkpoint every 2 optimizer steps
@@ -74,7 +77,7 @@ MONITOR_METRICS = (
 
 
 def label_reward(completion: str, gold: int) -> float:
-    """1.0 if the completion's first label word is the gold label, else 0.0."""
+    """1.0 if the completion's final answer is exactly one label word and it is the gold label, else 0.0."""
     return 1.0 if LabelParser().parse(completion) == gold else 0.0
 
 
@@ -243,6 +246,34 @@ def shaped_reward(label_reward_value: float, verdict: Optional[str], penalty: fl
     return label_reward_value - (penalty if verdict == "inconsistent" else 0.0)
 
 
+def training_reward(
+    label_value: float,
+    pred: Optional[int],
+    verdict: Optional[str],
+    penalty: float,
+    version: str = "v2",
+    malformed_margin: float = MALFORMED_MARGIN,
+) -> float:
+    """The reward a training rollout gets: the label reward, adjusted for the consistency judge.
+
+    v2 (default, the reward of the v2 run): `label_value - penalty` when the verdict is "inconsistent". Two gaps: a
+    malformed answer (no judge call) scores 0, which is more than a wrong answer whose reasoning contradicts its
+    label (-penalty), and an answer with no reasoning text skips the judge, so it can never be penalised.
+
+    v3 (with penalty > 0) closes both, keeping the order
+    correct > wrong > wrong and inconsistent > malformed:
+      - malformed (no parseable label): -(penalty + malformed_margin), below every parseable outcome;
+      - parseable but no reasoning text (verdict NO_REASONING): `label_value - penalty`, as if inconsistent.
+    With penalty 0 every version is the plain label reward.
+    """
+    if version == "v3" and penalty > 0:
+        if pred is None:
+            return -(penalty + malformed_margin)
+        if verdict == NO_REASONING:
+            return label_value - penalty
+    return shaped_reward(label_value, verdict, penalty)
+
+
 class ConsistencyJudge:
     """Asks an LLM whether a rollout's reasoning arrives at the label it output. Fails open.
 
@@ -297,10 +328,16 @@ class ConsistencyJudge:
                 print(self.summary(), flush=True)
         return result
 
+    def record(self, name: str) -> None:
+        """Count an event that did not need a call (e.g. a rollout with no reasoning to judge)."""
+        with self._lock:
+            self.stats[name] += 1
+
     def summary(self) -> str:
         s = self.stats
+        extra = f", no reasoning {s[NO_REASONING]}" if s[NO_REASONING] else ""
         return (f"JUDGE: {s['calls']} calls, inconsistent {s['inconsistent']}, unclear {s['unclear']}, "
-                f"errors {s['errors']}, unparsed {s['unparsed']}")
+                f"errors {s['errors']}, unparsed {s['unparsed']}{extra}")
 
 
 def thinking_text(message: Any) -> str:
@@ -388,6 +425,8 @@ def make_rollout_fn(
     eval_preds: Optional[dict[str, Optional[int]]] = None,
     consistency_judge: Optional[ConsistencyJudge] = None,
     consistency_penalty: float = 0.0,
+    reward_version: str = "v2",
+    malformed_margin: float = MALFORMED_MARGIN,
 ) -> Any:
     """Single-turn rollout: one sampled answer per call, graded by `label_reward`.
 
@@ -419,7 +458,13 @@ def make_rollout_fn(
                 verdict = await asyncio.to_thread(
                     consistency_judge.verdict, row_.get("premise", ""), row_.get("hypothesis", ""), thinking, LABELS[pred]
                 )
-            reward = shaped_reward(label_value, verdict, consistency_penalty)  # evaluation never gets a judge
+            if (not evaluation and consistency_judge is not None and reward_version == "v3"
+                    and consistency_penalty > 0 and pred is not None and not thinking):
+                verdict = NO_REASONING
+                consistency_judge.record(NO_REASONING)
+            # evaluation never gets a judge or a penalty: it is the plain label reward
+            reward = training_reward(label_value, pred, verdict, 0.0 if evaluation else consistency_penalty,
+                                     reward_version, malformed_margin)
             well_formed = is_well_formed(completion)
             parse_status = unparsed_reason(completion) or "parsed"
             if format_tracker is not None and not evaluation:
@@ -816,6 +861,7 @@ def run_rl(args: argparse.Namespace) -> dict[str, Any]:
                 make_rollout_fn, rollout_log=rollout_log, format_tracker=format_tracker, eval_formats=eval_formats,
                 eval_temperature=args.eval_temperature, eval_preds=eval_preds,
                 consistency_judge=consistency_judge, consistency_penalty=args.consistency_penalty,
+                reward_version=args.reward_version, malformed_margin=args.malformed_margin,
             ),
             rows=rows,
             evaluation_fn=evaluation_fn,
@@ -895,6 +941,12 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
                         help="reward subtracted when an LLM judge finds the reasoning concluding a different label "
                              "than the output (training rollouts only; 0 = off)")
     parser.add_argument("--consistency-judge-model", default=JUDGE_MODEL)
+    parser.add_argument("--reward-version", choices=REWARD_VERSIONS, default="v2",
+                        help="v2 (default): the reward of the v2 run. v3: a malformed answer scores below every "
+                             "parseable one, and an answer with no reasoning text is penalised like an inconsistent "
+                             "one (only with --consistency-penalty > 0)")
+    parser.add_argument("--malformed-margin", type=float, default=MALFORMED_MARGIN,
+                        help="v3: how far below the worst parseable outcome a malformed answer scores")
     parser.add_argument("--sample-timeout", type=int, default=SAMPLE_TIMEOUT_S,
                         help="seconds before one sampling request is abandoned")
     parser.add_argument("--stall-timeout", type=int, default=STALL_TIMEOUT_S,
@@ -911,6 +963,8 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
         parser.error("--eval-interval must be at least 1")
     if args.consistency_penalty < 0:
         parser.error("--consistency-penalty must be >= 0")
+    if args.malformed_margin < 0:
+        parser.error("--malformed-margin must be >= 0")
     if args.stop_filter_ratio is not None and not 0 < args.stop_filter_ratio < 1:
         parser.error("--stop-filter-ratio must be between 0 and 1")
     if args.max_steps is not None:
