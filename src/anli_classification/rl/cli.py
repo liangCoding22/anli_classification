@@ -197,7 +197,8 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
                              "than the output (training rollouts only; 0 = off)")
     parser.add_argument("--consistency-judge-model", default=JUDGE_MODEL)
     parser.add_argument("--reward-version", choices=REWARD_VERSIONS, default="v2",
-                        help="v2 (default): the reward of the v2 run. v3: a malformed answer scores below every "
+                        help="v2 (default): the reward of the v2 run, the one every reported result used. v3 (NOT yet "
+                             "used in a training run; unit-tested only): a malformed answer scores below every "
                              "parseable one, and an answer with no reasoning text is penalised like an inconsistent "
                              "one (only with --consistency-penalty > 0)")
     parser.add_argument("--malformed-margin", type=float, default=MALFORMED_MARGIN,
