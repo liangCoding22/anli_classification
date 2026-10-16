@@ -20,6 +20,7 @@ import csv
 import glob
 import gzip
 import hashlib
+import io
 import json
 import platform
 import shutil
@@ -90,6 +91,23 @@ def export_pools(pool_dir: Path, votes: dict, out: Path, manifest: dict) -> None
     manifest["teacher_votes"] = {"prompts": n}
 
 
+def export_hard_candidates(prompts_glob: str, pool_dir: Path, traces_glob: str, out: Path, manifest: dict) -> None:
+    """The "trusted hard" prompts pool_v2 was built from, in the order it was built with.
+
+    pool_v2 was built when the prompt files were read in directory-listing order (an unsorted glob), which is not sorted
+    order. The order decides the final shuffle, so it is frozen here: `build_clean_pool.py --hard-candidates` rebuilds the
+    pool from this file on any machine.
+    """
+    from anli_classification.pools import find_hard_prompts, load_votes
+
+    keys = {r["key"] for r in read_jsonl(pool_dir / "pool_mixed.jsonl")}
+    rows = (json.loads(line) for path in glob.glob(prompts_glob) for line in open(path))  # unsorted, as it was built
+    hard = find_hard_prompts(rows, keys, load_votes(traces_glob))
+    fields = [f for f in POOL_FIELDS if f != "teacher_votes"] + ["n_correct_4b", "teacher_votes"]
+    n = write_jsonl(out / "pools" / "hard_candidates.compact.jsonl", ({f: r.get(f) for f in fields} for r in hard.values()))
+    manifest["hard_candidates"] = {"rows": n, "order": "directory-listing order of the prompt files when pool_v2 was built"}
+
+
 def export_run(run_dir: Path, out: Path, manifest: dict) -> None:
     dst = out / "runs" / run_dir.name
     dst.mkdir(parents=True, exist_ok=True)
@@ -100,7 +118,9 @@ def export_run(run_dir: Path, out: Path, manifest: dict) -> None:
             kept.append(name)
     for rollouts in sorted(run_dir.glob("rollouts*.jsonl")):
         target = dst / (rollouts.stem + ".compact.csv.gz")
-        with gzip.open(target, "wt", newline="") as fh:
+        # mtime=0 and no embedded file name: the same rollouts always give the same bytes, so a re-export does not churn git
+        with gzip.GzipFile(filename="", mode="wb", fileobj=target.open("wb"), mtime=0) as raw, \
+                io.TextIOWrapper(raw, encoding="utf-8", newline="") as fh:
             writer = csv.writer(fh)
             writer.writerow(ROLLOUT_COLUMNS)
             for r in read_jsonl(rollouts):
@@ -148,6 +168,7 @@ def main() -> None:
     parser.add_argument("--extra-hash", nargs="*", default=[], help="more large local files to record a sha256 for")
     parser.add_argument("--runs", nargs="*", default=[], type=Path)
     parser.add_argument("--evals", nargs="*", default=[], help="tag=directory with <slice>.jsonl and metrics.json")
+    parser.add_argument("--prompts-glob", default=None, help="teacher prompt files, to freeze the hard candidates of pool_v2")
     parser.add_argument("--cookbook-dir", type=Path, default=None, help="cookbook checkout, to record its commit")
     parser.add_argument("--extra-json", type=Path, default=None, help="extra environment facts to record")
     parser.add_argument("--out", type=Path, default=Path("reproducibility"))
@@ -156,6 +177,8 @@ def main() -> None:
     manifest = {"pools": {}, "runs": {}, "results": {}, "large_inputs": {}}
     votes = teacher_votes(args.traces_glob)
     export_pools(args.pool_dir, votes, args.out, manifest)
+    if args.prompts_glob:
+        export_hard_candidates(args.prompts_glob, args.pool_dir, args.traces_glob, args.out, manifest)
     for name in sorted(glob.glob(args.traces_glob)) + list(args.extra_hash):
         manifest["large_inputs"][name] = sha256(Path(name))
     for run in args.runs:

@@ -178,7 +178,15 @@ labels share, so dropping them is a bet (not tested separately).
 
 - `pool_clean.jsonl`: `agree` rows only, balanced to the smallest class: 984 per class, 2,952 rows.
 - `pool_clean_unbalanced.jsonl`: all 4,237 `agree` rows.
-- `pool_v2.jsonl` (`--neutral-share 0.36 --hard`): see "The last run".
+- `pool_v2.jsonl` (`--neutral-share 0.36 --hard`): see "The last run". The hard prompts are now searched for in prompt files
+  read in sorted order, so the result does not depend on the directory listing. The existing `pool_v2` was built in listing
+  order, which is not sorted order and changes the final shuffle, so that order is frozen in
+  `reproducibility/pools/hard_candidates.compact.jsonl`; `--hard-candidates` rebuilds the pool from it exactly
+  (`tests/test_pools.py` does this from the committed files).
+
+Scripts take their input and output locations as flags; the defaults are under `outputs/`, or `$ANLI_OUTPUT_DIR`
+(`anli_classification/paths.py`). The selection logic lives in `anli_classification/pools.py` and `teacher_data.py`
+(tested); the scripts only read and write files.
 - `clean_summary.json`: the counts above.
 
 ### How the RL loop works here

@@ -22,24 +22,9 @@ from pathlib import Path
 
 from anli_classification.llm.base import ChatRequest
 from anli_classification.llm.fireworks import FireworksBatchBackend
-from anli_classification.parsers import parse_answer, split_reasoning, unparsed_reason
-from anli_classification.prompts import NliPromptV3
-from anli_classification.schemas import LABELS, Example
+from anli_classification.paths import output_root
+from anli_classification.teacher_data import build_requests, collect
 
-OUT_ROOT = Path("outputs/teacher_traces")
-
-
-def build_requests(rows: list[dict], default_samples: int, max_tokens: int, temperature: float, top_p: float):
-    prompt = NliPromptV3()
-    requests = []
-    for r in rows:
-        example = Example(split="train", round_id="r3", uid=r["key"], premise=r["premise"],
-                          hypothesis=r["hypothesis"], label=r["gold"], reason="")
-        messages = prompt.build(example)
-        for s in range(r.get("samples", default_samples)):
-            requests.append(ChatRequest(key=f"{r['key']}#{s}", messages=messages, max_tokens=max_tokens,
-                                        temperature=temperature, top_p=top_p))
-    return requests
 
 
 def download_with_retry(backend: FireworksBatchBackend, dataset: str, tries: int = 6) -> str:
@@ -82,36 +67,6 @@ def run_chunk(model: str, account_id: str, chunk_dir: Path, requests: list[ChatR
     print(f"{chunk_dir.name}: done ({finished[-1].name})", flush=True)
 
 
-def collect(run_dir: Path, gold_of: dict[str, int]) -> int:
-    n = 0
-    with open(run_dir / "traces.jsonl", "w") as out:
-        for output in sorted(run_dir.glob("chunk_*/output.jsonl")):
-            for line in output.read_text().splitlines():
-                if not line.strip():
-                    continue
-                row = json.loads(line)
-                custom_id = row["custom_id"]
-                key, _, sample = custom_id.rpartition("#")
-                if row.get("error"):
-                    rec = {"key": key, "sample": int(sample), "error": json.dumps(row["error"])}
-                else:
-                    resp = row.get("response") or row
-                    choice = resp["choices"][0]
-                    message = choice["message"]
-                    text = message.get("content") or ""
-                    reasoning = message.get("reasoning_content") or message.get("reasoning") or ""
-                    if not reasoning:
-                        reasoning, text = split_reasoning(text)
-                    pred = parse_answer(text)
-                    rec = {"key": key, "sample": int(sample), "gold": gold_of[key], "pred": LABELS[pred] if pred is not None else None,
-                           "correct": pred == gold_of[key], "finish_reason": choice.get("finish_reason"),
-                           "completion_tokens": (resp.get("usage") or {}).get("completion_tokens"),
-                           "unparsed_reason": unparsed_reason(text), "raw": text, "reasoning": reasoning.strip()}
-                out.write(json.dumps(rec, ensure_ascii=False) + "\n")
-                n += 1
-    return n
-
-
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--prompts", type=Path, required=True)
@@ -124,6 +79,7 @@ def main() -> None:
     parser.add_argument("--top-p", type=float, default=0.95)
     parser.add_argument("--chunks", type=int, default=4, help="batch jobs to split the requests into (run in parallel)")
     parser.add_argument("--seed", type=int, default=0)
+    parser.add_argument("--out-root", type=Path, default=output_root() / "teacher_traces")
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
 
@@ -132,7 +88,7 @@ def main() -> None:
     random.Random(args.seed).shuffle(requests)  # every chunk gets the same mix of prompts
     size = -(-len(requests) // args.chunks)
     parts = [requests[i : i + size] for i in range(0, len(requests), size)]
-    run_dir = OUT_ROOT / args.model.split("/")[-1] / args.run_name
+    run_dir = args.out_root / args.model.split("/")[-1] / args.run_name
     print(f"{len(rows)} prompts -> {len(requests)} requests in {len(parts)} chunks of up to {size}; out: {run_dir}", flush=True)
     if args.dry_run:
         return
