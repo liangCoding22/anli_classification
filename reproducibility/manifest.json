@@ -90,6 +90,10 @@
   "teacher_votes": {
     "prompts": 8720
   },
+  "hard_candidates": {
+    "rows": 297,
+    "order": "directory-listing order of the prompt files when pool_v2 was built"
+  },
   "environment": {
     "python": "3.12.15",
     "packages": {
@@ -99,7 +103,7 @@
       "datasets": "5.1.0",
       "tokenizers": "0.22.2"
     },
-    "repo_commit": "d2c3c904398aebaf5e8317dc831683dffbb9be37",
+    "repo_commit": "a73846bad064bd82938def078ab53f1b227ee770",
     "cookbook_commit": "4dfdb6eaf38eb7f5be17d7b25bd3dbb3da0f843e",
     "trainer_job": "training-api-service-0092fcad",
     "state": "JOB_STATE_DELETED",

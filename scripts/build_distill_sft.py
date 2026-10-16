@@ -21,37 +21,12 @@ same shape as sft_data.py: system, user (zero-shot-v3 prompt), assistant with `r
 import argparse
 import json
 import random
-import re
 from collections import Counter, defaultdict
 from pathlib import Path
 
 from anli_classification.schemas import LABELS
 from anli_classification.sft_data import to_messages
-
-STRAY = re.compile(r"\.cw\s*$")
-CJK = re.compile(r"[\u4e00-\u9fff]")
-# Claims about dataset or annotation conventions ("standard NLI protocol", "many NLI datasets label ...").
-PROTOCOL_CLAIM = re.compile(
-    r"(NLI (datasets?|benchmarks?|protocol|conventions?)|standard NLI (protocol|practice|convention)|in (most|many|typical) NLI)"
-)
-
-
-def clean(reasoning: str) -> str:
-    return STRAY.sub(".", reasoning.rstrip()).strip()
-
-
-def usable(t: dict, max_tokens: int, max_waits: int, drop_cjk: bool = False, drop_protocol_claims: bool = False) -> bool:
-    return (
-        "error" not in t
-        and t["correct"]
-        and t["finish_reason"] == "stop"
-        and t["completion_tokens"] <= max_tokens
-        and len(re.findall(r"\bWait\b", t["reasoning"])) <= max_waits
-        and bool(t["reasoning"].strip())
-        and not (drop_cjk and CJK.search(t["reasoning"]))
-        and not (drop_protocol_claims and PROTOCOL_CLAIM.search(t["reasoning"]))
-    )
-
+from anli_classification.teacher_data import clean, usable
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
