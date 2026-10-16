@@ -11,9 +11,22 @@ from anli_classification.rendering import DEFAULT_TOKENIZER_MODEL
 DEFAULT_MODEL = "accounts/fireworks/models/qwen3-4b"
 
 
+def split_model(model: str) -> tuple[str, Optional[str]]:
+    """Split '<model>#<deployment>' (how a promoted model on a deployment is addressed) into its two parts.
+
+    A plain model name gives (model, None).
+    """
+    base, separator, deployment = model.partition("#")
+    return base, (deployment or None) if separator else None
+
+
 def model_slug(model: str) -> str:
-    """Directory-safe name for a model, e.g. 'qwen3-4b' for 'accounts/fireworks/models/qwen3-4b'."""
-    return re.sub(r"[^A-Za-z0-9._-]+", "_", model.split("/")[-1])
+    """Directory-safe name for a model, e.g. 'qwen3-4b' for 'accounts/fireworks/models/qwen3-4b'.
+
+    For '<model>#<deployment>' the slug is the model's: results belong to the model, and the
+    deployment is only where it was served. (Before this, the deployment id became the slug.)
+    """
+    return re.sub(r"[^A-Za-z0-9._-]+", "_", split_model(model)[0].split("/")[-1])
 
 
 TEMPLATES = ("server", "client")  # who applies the chat template; see rendering.py
@@ -21,14 +34,21 @@ CLIENT_TEMPLATE_SUFFIX = "-client-template"
 
 
 def run_dir_for(
-    output_dir: Path, model: str, prompt_version: str = NliPromptV3.VERSION, template: str = "server"
+    output_dir: Path,
+    model: str,
+    prompt_version: str = NliPromptV3.VERSION,
+    template: str = "server",
+    run_tag: Optional[str] = None,
 ) -> Path:
     """Where a model's predictions and metrics for one prompt version live.
 
     Client-templated runs get their own directory: the model sees different prompt tokens, so
     their cached predictions must never be reused for a server-templated run, or the reverse.
+    `run_tag` adds a further suffix, for results made with other sampling settings (see run_spec.py).
     """
     suffix = CLIENT_TEMPLATE_SUFFIX if template == "client" else ""
+    if run_tag:
+        suffix += "--" + re.sub(r"[^A-Za-z0-9._-]+", "_", run_tag)
     return output_dir / model_slug(model) / f"{prompt_version}{suffix}"
 
 
@@ -52,7 +72,8 @@ class RunConfig:
     output_dir: Path = field(default=Path("outputs"))
     template: str = "server"  # "client": render prompts locally with the HF template, thinking on
     tokenizer_model: str = DEFAULT_TOKENIZER_MODEL  # HF tokenizer for template="client"
+    run_tag: Optional[str] = None  # separate results folder for the same model and prompt (other sampling settings)
 
     @property
     def run_dir(self) -> Path:
-        return run_dir_for(self.output_dir, self.model, self.prompt_version, self.template)
+        return run_dir_for(self.output_dir, self.model, self.prompt_version, self.template, self.run_tag)

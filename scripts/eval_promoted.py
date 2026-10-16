@@ -4,12 +4,14 @@ Creates the deployment, waits for READY, runs `anli-eval --template client` agai
 deployment's own inference name, then deletes the deployment (unless --keep-deployment).
 
     PYTHONPATH=src .venv-sft/bin/python scripts/eval_promoted.py \
-        --promoted-model accounts/liangs-sun-ls-bseznh/models/anli-sft-step141 \
-        --deployment-id anli-sft-step141-eval \
+        --promoted-model accounts/<account>/models/<promoted-id> \
+        --deployment-id <promoted-id>-eval \
         --splits dev --rounds r3 --limit 1000
 
 Requires FIREWORKS_API_KEY in the environment (source .env first).
-Sampling defaults match the v3 runs: --temperature 0.6 --top-p 0.95.
+Sampling defaults are --temperature 0.6 --top-p 0.95; pass --temperature 0.0 for greedy decoding. Results go under the
+promoted model's folder (not the deployment's); results made with other sampling settings than the folder's cached ones are
+refused unless you pass --run-tag NAME (see run_spec.py).
 """
 
 import argparse
@@ -18,6 +20,8 @@ import subprocess
 import sys
 
 from fireworks.training.sdk.deployment import DeploymentConfig, DeploymentManager
+
+from anli_classification.deploy import serving_probe, wait_until_serving
 
 REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 SHAPE = "accounts/fireworks/deploymentShapes/rft-qwen3-4b"
@@ -38,6 +42,9 @@ def main() -> int:
     parser.add_argument("--output-dir", default="outputs", help="root for predictions and metrics")
     parser.add_argument("--max-tokens", type=int, default=4096, help="generation limit per reply")
     parser.add_argument("--keep-deployment", action="store_true", help="do not delete the deployment afterwards")
+    parser.add_argument("--run-tag", default=None, help="write results to a separate folder (passed to anli-eval)")
+    parser.add_argument("--serve-timeout", type=float, default=600.0,
+                        help="seconds to wait for the ready deployment to answer a test request")
     args = parser.parse_args()
 
     mgr = DeploymentManager(api_key=os.environ["FIREWORKS_API_KEY"])
@@ -59,6 +66,9 @@ def main() -> int:
         # promoted model. Fireworks wants "<model>#<deployment>" (as in the cookbook).
         model = f"{args.promoted_model}#{ready.inference_model}"
         print("ready:", ready.name, "serving as", model, flush=True)
+        # READY does not mean requests are routed yet: early ones can fail with 404 "model not found".
+        wait_until_serving(serving_probe(model), timeout_s=args.serve_timeout)
+        print("deployment answers requests", flush=True)
         cmd = [
             sys.executable, "-m", "anli_classification.cli",
             "--model", model,
@@ -74,6 +84,8 @@ def main() -> int:
         ]
         if args.limit is not None:
             cmd += ["--limit", str(args.limit)]
+        if args.run_tag:
+            cmd += ["--run-tag", args.run_tag]
         env = dict(os.environ, PYTHONPATH=os.path.join(REPO, "src"))
         print("running:", " ".join(cmd), flush=True)
         subprocess.run(cmd, cwd=REPO, env=env, check=True)

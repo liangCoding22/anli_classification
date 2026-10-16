@@ -102,7 +102,9 @@ outputs/<model-slug>/<prompt-version>/
     └── summary.json        job metadata, row counts, headline metrics
 ```
 
-- **Model slug:** the last path segment of the model name, e.g. `qwen3-4b`.
+- **Model slug:** the last path segment of the model name, e.g. `qwen3-4b`. For `<model>#<deployment>` (a promoted
+  model on a deployment) it is the model's, not the deployment's; results made before this fix sit in folders named
+  after the deployment id and are not found automatically.
 - **Prompt version:** the `VERSION` of a prompt class in `prompts.py`. Available: `zero-shot-v3`
   (default, `NliPromptV3`, defines the labels as logical relations), `zero-shot-v2`
   (`NliPrompt`), and two experimental variants, `zero-shot-v4a` and `zero-shot-v4b`, that both scored
@@ -113,6 +115,10 @@ outputs/<model-slug>/<prompt-version>/
 - **Resuming:** runs read the slice JSONL files first. Successful predictions are kept,
   and failed requests (API errors, rows missing from a batch) are retried. An empty reply
   (thinking used up `--max-tokens`) is an answer and counts as wrong, as in RL; it is not retried.
+- **Run settings:** each folder holds a `run_spec.json` with the settings that produced its cached predictions (model,
+  prompt version, template, temperature, top-p, top-k, max tokens, samples). A run with different settings is refused,
+  because it would otherwise find every example cached and report the old answers; pass `--run-tag NAME` to write it to
+  `<prompt-version>--NAME`. A folder with predictions but no spec (made before this) is reused with a warning.
 - **Caveat:** `anli-batch-report` files results under the *current* prompt version. If the
   job used an older prompt, check the job's `input.jsonl` before trusting that directory.
 

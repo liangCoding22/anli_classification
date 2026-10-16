@@ -71,6 +71,7 @@ class FireworksChatBackend:
                 max_tokens=request.max_tokens,
                 temperature=request.temperature,
                 top_p=request.top_p,
+                **({"extra_body": {"top_k": request.top_k}} if request.top_k is not None else {}),
             )
             message = response.choices[0].message
             # Fireworks reasoning models return thinking in a separate field.
