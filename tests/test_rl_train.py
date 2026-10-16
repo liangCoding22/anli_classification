@@ -386,7 +386,7 @@ def test_judge_sees_premise_hypothesis_reasoning_and_label_but_not_gold():
     assert "gold" not in user.lower()
 
 
-def test_judge_fails_open_and_caches():
+def test_judge_fails_open_and_caches(monkeypatch):
     from anli_classification.rl_train import ConsistencyJudge
 
     calls = []
@@ -396,14 +396,8 @@ def test_judge_fails_open_and_caches():
         raise OSError("network down")
 
     judge = ConsistencyJudge(post=broken, report_every=10 ** 9)
-    import anli_classification.rl_train as module
-
-    original_sleep = module.time.sleep
-    module.time.sleep = lambda _: None
-    try:
-        assert judge.verdict("p", "h", "t", "neutral") is None  # an outage gives no verdict, hence no penalty
-    finally:
-        module.time.sleep = original_sleep
+    monkeypatch.setattr("time.sleep", lambda _: None)  # skip the retry backoff
+    assert judge.verdict("p", "h", "t", "neutral") is None  # an outage gives no verdict, hence no penalty
     assert len(calls) == 3 and judge.stats["errors"] == 1
 
     ok = ConsistencyJudge(post=lambda body: {"choices": [{"message": {"content": "consistent entailment"}}]}, report_every=10 ** 9)
