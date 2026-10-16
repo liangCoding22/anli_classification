@@ -5,17 +5,32 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import subprocess
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, Optional
 
 from anli_classification.rl.defaults import CONFIG_FILE, METRICS_FILE, ROLLOUTS_FILE
+
+
+def code_version() -> dict[str, Any]:
+    """The git commit the run was started from and whether the tree had uncommitted changes (None outside a repository)."""
+    def git(*command: str) -> Optional[str]:
+        try:
+            return subprocess.run(["git", *command], capture_output=True, text=True, check=True, cwd=Path(__file__).parent).stdout
+        except Exception:
+            return None
+
+    sha = git("rev-parse", "HEAD")
+    status = git("status", "--porcelain")
+    return {"git_sha": sha.strip() if sha else None, "dirty": bool(status.strip()) if status is not None else None}
 
 
 def write_run_config(args: argparse.Namespace, log_dir: Path, train_rows: list[dict], dev_rows: list[dict]) -> None:
     """Record exactly what the run was started with, so a later debugging session can reproduce it."""
     record = {
         "args": {key: str(value) for key, value in vars(args).items()},
+        "code": code_version(),
         "train_keys": [row["key"] for row in train_rows],
         "dev_keys": [row["key"] for row in dev_rows],
         "cookbook_metrics_file": str(log_dir / METRICS_FILE),

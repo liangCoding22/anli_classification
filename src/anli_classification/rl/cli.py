@@ -1,4 +1,11 @@
-"""Command line and the run itself."""
+"""Command line and the run itself.
+
+    anli-rl-train --pool-path <pool.jsonl> --training-shape <shape>            # the original defaults
+    anli-rl-train --recipe v2 --pool-path <pool_v2.jsonl> --training-shape ... # the last run (see recipes.py)
+
+Needs the Fireworks cookbook (Python 3.11+, Training API private preview); its imports are local to the functions that use
+them, so this package still imports on Python 3.9.
+"""
 
 from __future__ import annotations
 
@@ -7,9 +14,7 @@ import functools
 import os
 import time
 from pathlib import Path
-from typing import Any
-from typing import Optional
-from typing import Sequence
+from typing import Any, Optional, Sequence
 
 from anli_classification.config import DEFAULT_MODEL
 from anli_classification.rl.cleanup import delete_run_resources, start_stall_watchdog
@@ -39,6 +44,7 @@ from anli_classification.rl.defaults import (
 from anli_classification.rl.dev_metrics import dev_accuracy
 from anli_classification.rl.guards import print_eval
 from anli_classification.rl.launch import build_config, resolve_training_shape, write_run_config
+from anli_classification.rl.recipes import RECIPES
 from anli_classification.rl.logs import FormatTracker, RolloutLog
 from anli_classification.rl.reward import ConsistencyJudge, floored_advantages
 from anli_classification.rl.rollout import make_rollout_fn
@@ -125,6 +131,9 @@ def run_rl(args: argparse.Namespace) -> dict[str, Any]:
 
 def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="GRPO post-training on the training pool (cookbook rl_loop).")
+    parser.add_argument("--recipe", choices=tuple(RECIPES), default="legacy",
+                        help="a named set of flags (see recipes.py) used as the defaults; flags given explicitly "
+                             "still win. legacy (default) changes nothing; v2 is the last run")
     parser.add_argument("--pool-path", required=True, help="pool.jsonl from anli-training-pool")
     parser.add_argument("--base-model", default=DEFAULT_MODEL)
     parser.add_argument("--tokenizer-model", default="Qwen/Qwen3-4B")
@@ -160,7 +169,8 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
                         help="alert when this share of recent training answers breaks the one-word format")
     parser.add_argument("--log-path", default="./anli-rl-logs")
     parser.add_argument("--output-model-id", default=None, help="promote the final checkpoint to this id")
-    parser.add_argument("--skip-cleanup", action="store_true", help="keep trainer and deployment running")
+    parser.add_argument("--skip-cleanup", action=argparse.BooleanOptionalAction, default=False,
+                        help="keep trainer and deployment running (--no-skip-cleanup overrides a recipe)")
     parser.add_argument("--delete-on-failure", action=argparse.BooleanOptionalAction, default=True,
                         help="if the run crashes, delete its trainer job and deployment so they stop billing")
     parser.add_argument("--weight-sync-timeout", type=int, default=WEIGHT_SYNC_TIMEOUT_S,
@@ -188,6 +198,10 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
                              "many seconds (0 = off)")
     parser.add_argument("--wandb-entity", default=os.environ.get("WANDB_ENTITY", ""))
     parser.add_argument("--wandb-project", default=os.environ.get("WANDB_PROJECT", "anli-rl"))
+    # The recipe is read first (a full parse would fail on the missing required flags), then set as the defaults.
+    chooser = argparse.ArgumentParser(add_help=False)
+    chooser.add_argument("--recipe", choices=tuple(RECIPES), default="legacy")
+    parser.set_defaults(**RECIPES[chooser.parse_known_args(argv)[0].recipe])
     args = parser.parse_args(argv)
     if args.completions_per_prompt < 2:
         parser.error("--completions-per-prompt must be at least 2 for GRPO")

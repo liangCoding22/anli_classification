@@ -31,7 +31,8 @@ def make_rollout_fn(
     `evaluation` is True for dev evaluation rollouts, which sample at `eval_temperature` (None keeps the
     training temperature); each graded rollout is written to
     `rollout_log` with its completion text, so failures can be inspected later.
-    Mirrors the cookbook's DeepMath example; the cookbook imports are local to this function.
+    A training rollout may get the judge-adjusted reward; an evaluation rollout never does. The cookbook imports are local to
+    this function, so the module imports without it.
     """
     import asyncio
 
