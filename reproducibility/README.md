@@ -1,7 +1,7 @@
 # Reproducing the reported results
 
-Everything here was exported by `scripts/export_repro_artifacts.py` from the runs described in the top-level README
-("Training (GRPO) and experiment log"). It holds what is small enough to share; the large inputs stay out of git.
+Everything here was exported by `scripts/export_repro_artifacts.py` from the runs described in [docs/training.md](../docs/training.md) and
+[docs/experiments.md](../docs/experiments.md). It holds what is small enough to share; the large inputs stay out of git.
 
 ## What is here
 
@@ -13,6 +13,7 @@ reproducibility/
     pool_mixed.compact.jsonl   5,993 mixed prompts (4B got 1-3 of 4 right)
     pool_clean.compact.jsonl   2,952: teacher-verified, balanced 984 per class
     pool_v2.compact.jsonl      3,937: the pool of the last run (neutral 36%, 297 trusted hard prompts)
+    hard_candidates.compact.jsonl  the 297 hard prompts in the order pool_v2 was built with (see docs/training.md)
     teacher_votes.jsonl        every parsed teacher vote per prompt (397B teacher)
     clean_summary.json, n50000_summary.json
   runs/<run>/              run_config.json (arguments and the example keys), metrics.jsonl (every metric the cookbook
@@ -35,8 +36,10 @@ The compact pool files can be passed straight to `anli-rl-train --pool-path`: th
 ## Re-running the last run
 
 Environment (from the manifest): Python 3.12, the cookbook at the recorded commit, training shape version
-`qwen3-4b-minimum/versions/i2yojzpo`, judge `accounts/fireworks/models/gpt-oss-120b`. Then the command in the top-level
-README ("The last run (v2)") with `--pool-path reproducibility/pools/pool_v2.compact.jsonl`.
+`qwen3-4b-minimum/versions/i2yojzpo`, judge `accounts/fireworks/models/gpt-oss-120b`. Then `anli-rl-train --recipe v2` (the command
+is in [docs/training.md](../docs/training.md), "The last run (v2)") with
+`--pool-path reproducibility/pools/pool_v2.compact.jsonl`. To rebuild the pool itself, use
+`scripts/build_clean_pool.py --neutral-share 0.36 --hard-candidates reproducibility/pools/hard_candidates.compact.jsonl`.
 
 A rerun will not match bit for bit: training samples at temperature 1.0 without a seed, the judge and the base model are
 hosted, and the Training API is a private preview. Expect the same behavior, not the same weights. The claim worth
