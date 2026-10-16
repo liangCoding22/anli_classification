@@ -467,3 +467,71 @@ def test_floored_advantages_keep_a_lone_penalty_in_proportion_and_leave_binary_g
     assert floored_advantages(one_success, 0.2) == floored_advantages(one_success, 0.0)
     # equal rewards stay at zero
     assert floored_advantages([1.0] * 16, 0.2) == [0.0] * 16
+
+
+# ---- reward versions -------------------------------------------------------------------------------------------
+
+def _outcomes_with_reasoning():
+    for label in (0.0, 1.0):
+        for verdict in ("consistent", "inconsistent", "unclear", None):
+            yield label, verdict
+
+
+def test_reward_v2_is_exactly_the_legacy_reward_so_the_v2_run_still_means_what_it_did():
+    from anli_classification.rl_train import NO_REASONING, shaped_reward, training_reward
+
+    for penalty in (0.0, 0.1, 0.25, 0.5):
+        for label, verdict in _outcomes_with_reasoning():
+            assert training_reward(label, 1, verdict, penalty, "v2") == shaped_reward(label, verdict, penalty)
+    # the two gaps v3 closes are still there in v2: malformed scores 0 and no reasoning is never penalised
+    assert training_reward(0.0, None, None, 0.25, "v2") == 0.0
+    assert training_reward(1.0, 1, NO_REASONING, 0.25, "v2") == 1.0
+    assert training_reward(0.0, 1, "inconsistent", 0.25, "v2") == -0.25
+
+
+def test_reward_v3_orders_outcomes_correct_over_wrong_over_inconsistent_over_malformed():
+    from anli_classification.rl_train import NO_REASONING, training_reward
+
+    for penalty in (0.05, 0.25, 0.5):
+        for margin in (0.1, 0.25):
+            parseable = [training_reward(label, 1, verdict, penalty, "v3", margin)
+                         for label, verdict in _outcomes_with_reasoning()]
+            malformed = training_reward(0.0, None, None, penalty, "v3", margin)
+            assert malformed < min(parseable)  # the incentive the review found: malformed must never beat a wrong answer
+            assert malformed == -(penalty + margin)
+            assert (training_reward(1.0, 1, "consistent", penalty, "v3", margin)
+                    > training_reward(1.0, 1, "inconsistent", penalty, "v3", margin)
+                    > training_reward(0.0, 1, "consistent", penalty, "v3", margin)
+                    > training_reward(0.0, 1, "inconsistent", penalty, "v3", margin) > malformed)
+            # no reasoning text is penalised exactly like an inconsistent answer, never better than a verified one
+            for label in (0.0, 1.0):
+                assert (training_reward(label, 1, NO_REASONING, penalty, "v3", margin)
+                        == training_reward(label, 1, "inconsistent", penalty, "v3", margin)
+                        < training_reward(label, 1, "consistent", penalty, "v3", margin))
+
+
+def test_reward_v3_without_a_penalty_is_the_plain_label_reward_so_runs_without_a_judge_are_unchanged():
+    from anli_classification.rl_train import NO_REASONING, training_reward
+
+    for version in ("v2", "v3"):
+        assert training_reward(1.0, 1, "inconsistent", 0.0, version) == 1.0
+        assert training_reward(0.0, None, None, 0.0, version) == 0.0
+        assert training_reward(1.0, 1, NO_REASONING, 0.0, version) == 1.0
+
+
+def test_reward_version_flags_default_to_the_legacy_reward():
+    from anli_classification.rl_train import parse_args
+
+    args = parse_args(["--pool-path", "x"])
+    assert args.reward_version == "v2" and args.malformed_margin == 0.25
+    assert parse_args(["--pool-path", "x", "--reward-version", "v3"]).reward_version == "v3"
+
+
+def test_judge_summary_reports_rollouts_that_had_no_reasoning():
+    from anli_classification.rl_train import NO_REASONING, ConsistencyJudge
+
+    judge = ConsistencyJudge(post=lambda body: {"choices": [{"message": {"content": "consistent none"}}]})
+    assert "no reasoning" not in judge.summary()
+    judge.record(NO_REASONING)
+    judge.record(NO_REASONING)
+    assert judge.summary().endswith("no reasoning 2")

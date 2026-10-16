@@ -246,6 +246,14 @@ R = label_reward - 0.25 * 1[judge says the reasoning concludes a different label
 | wrong, reasoning concludes another label | -0.25 |
 | malformed or no thinking text | 0.00 (no judge call) |
 
+**Reward v3 (`--reward-version v3`, opt-in; v2 stays the default so the command above is unchanged).** Two gaps in the
+v2 reward were found in review: a malformed answer (no judge call) scored 0, more than a wrong answer whose reasoning
+contradicts its label (-0.25), and an answer with no reasoning text skipped the judge, so it could never be penalised. v3
+(with a penalty above 0) scores a malformed answer `-(penalty + 0.25)`, below every parseable outcome, and penalises a
+parseable answer with no reasoning like an inconsistent one (verdict `no_reasoning`). The v2 logs show no sign the gaps were
+exploited (malformed fell from about 1.5% to 0%, no-reasoning stayed near 0%), so they were a latent incentive, not an
+observed one. Runs without a penalty are unaffected by the version.
+
 Evaluation and the `outcome` field in `rollouts.jsonl` use the strict label reward only; the shaped reward is logged as
 `reward`, the strict one as `label_reward`, the verdict as `judge_verdict`.
 
