@@ -1,5 +1,7 @@
 import json
 
+import pytest
+
 from types import SimpleNamespace
 
 from anli_classification.rl_train import dev_accuracy, label_reward, load_pool_rows
@@ -234,7 +236,10 @@ def test_delete_run_resources_deletes_trainer_and_only_new_deployments_of_the_ba
     done = delete_run_resources(tmp_path, started, "m", api=api)
     deletes = [path for method, path in calls if method == "DELETE"]
     assert deletes == ["accounts/a/rlorTrainerJobs/job1", "accounts/a/deployments/new?ignoreChecks=true"]
-    assert len(done) == 2
+    assert sum(line.startswith("deleted") for line in done) == 2
+    # a deployment found only by creation time is listed as a guess before it is deleted
+    assert "matched by creation time (not recorded): accounts/a/deployments/new" in done
+    assert not any("job1" in line and "matched" in line for line in done)  # the recorded trainer is not a guess
 
 
 def test_stall_watchdog_fires_only_after_the_timeout_without_file_activity(tmp_path):
@@ -386,7 +391,7 @@ def test_judge_sees_premise_hypothesis_reasoning_and_label_but_not_gold():
     assert "gold" not in user.lower()
 
 
-def test_judge_fails_open_and_caches():
+def test_judge_fails_open_and_caches(monkeypatch):
     from anli_classification.rl_train import ConsistencyJudge
 
     calls = []
@@ -396,14 +401,8 @@ def test_judge_fails_open_and_caches():
         raise OSError("network down")
 
     judge = ConsistencyJudge(post=broken, report_every=10 ** 9)
-    import anli_classification.rl_train as module
-
-    original_sleep = module.time.sleep
-    module.time.sleep = lambda _: None
-    try:
-        assert judge.verdict("p", "h", "t", "neutral") is None  # an outage gives no verdict, hence no penalty
-    finally:
-        module.time.sleep = original_sleep
+    monkeypatch.setattr("time.sleep", lambda _: None)  # skip the retry backoff
+    assert judge.verdict("p", "h", "t", "neutral") is None  # an outage gives no verdict, hence no penalty
     assert len(calls) == 3 and judge.stats["errors"] == 1
 
     ok = ConsistencyJudge(post=lambda body: {"choices": [{"message": {"content": "consistent entailment"}}]}, report_every=10 ** 9)
@@ -535,3 +534,118 @@ def test_judge_summary_reports_rollouts_that_had_no_reasoning():
     judge.record(NO_REASONING)
     judge.record(NO_REASONING)
     assert judge.summary().endswith("no reasoning 2")
+
+
+# ---- stop reasons, run result, cleanup scope --------------------------------------------------------------------
+
+def _stop_reason(monkeypatch, evaluation, step, **kwargs):
+    import asyncio
+
+    from anli_classification.rl_train import StopAtStep, print_eval
+
+    import sys
+    from types import ModuleType
+
+    fake = ModuleType("training.utils.logging")
+    fake.log_metrics = lambda metrics, step: None
+    monkeypatch.setitem(sys.modules, "training.utils.logging", fake)
+    hook = print_eval(evaluation, **kwargs)
+    try:
+        asyncio.run(hook(step, None))
+    except StopAtStep as stop:
+        return stop.step, stop.reason
+    return None
+
+
+def test_each_guard_stops_the_run_with_its_own_reason(monkeypatch, tmp_path):
+    async def fine(step, rollout_fn):
+        return {"dev/recall_neutral": 0.70}
+
+    assert _stop_reason(monkeypatch, fine, 12, max_steps=12) == (12, "max_steps")
+    assert _stop_reason(monkeypatch, fine, 6, max_steps=12) is None
+
+    metrics = tmp_path / "metrics.jsonl"
+    metrics.write_text("".join(json.dumps({"rollout/filter_ratio": r}) + "\n" for r in (0.7, 0.8, 0.9)))
+    assert _stop_reason(monkeypatch, fine, 6, stop_filter_ratio=0.5, metrics_path=metrics) == (6, "filter_ratio")
+
+    recalls = iter([0.70, 0.55])
+
+    async def collapsing(step, rollout_fn):
+        return {"dev/recall_neutral": next(recalls)}
+
+    assert _stop_reason(monkeypatch, collapsing, 0, stop_class_drop=0.10) is None  # the first eval is the baseline
+    # a class collapse is reported as such even when the step cap is reached at the same eval
+    import asyncio
+    from anli_classification.rl_train import StopAtStep, print_eval
+
+    hook = print_eval(collapsing, max_steps=2, stop_class_drop=0.10)
+    recalls = iter([0.70, 0.55])
+    asyncio.run(hook(0, None))
+    with pytest.raises(StopAtStep) as stop:
+        asyncio.run(hook(2, None))
+    assert stop.value.reason == "class_drop"
+
+
+def test_stop_at_step_keeps_its_old_signature_and_defaults_to_the_step_cap():
+    from anli_classification.rl_train import StopAtStep
+
+    stop = StopAtStep(7)
+    assert (stop.step, stop.reason) == (7, "max_steps") and "7" in str(stop)
+    assert isinstance(stop, BaseException) and not isinstance(stop, Exception)
+
+
+def test_run_result_records_how_the_run_ended(tmp_path):
+    from argparse import Namespace
+
+    from anli_classification.rl.launch import write_run_result
+
+    (tmp_path / "trainer_job.json").write_text(json.dumps({"trainer_job_id": "job9"}))
+    args = Namespace(deployment_id="dep1", recipe="v2")
+    write_run_result(tmp_path, "stopped", stop_reason="class_drop", final_step=12, args=args)
+    record = json.loads((tmp_path / "run_result.json").read_text())
+    assert (record["status"], record["stop_reason"], record["final_step"]) == ("stopped", "class_drop", 12)
+    assert (record["trainer_job_id"], record["deployment_id"], record["recipe"]) == ("job9", "dep1", "v2")
+    write_run_result(tmp_path, "failed", error="RuntimeError: boom", args=args)
+    assert json.loads((tmp_path / "run_result.json").read_text())["error"] == "RuntimeError: boom"
+
+
+def _cleanup_api(jobs, deployments, calls):
+    def api(method, path, api_key, base_url):
+        calls.append((method, path))
+        if path == "accounts":
+            return {"accounts": [{"name": "accounts/a"}]}
+        if method == "GET" and "rlorTrainerJobs" in path:
+            return {"rlorTrainerJobs": jobs}
+        if method == "GET":
+            return {"deployments": deployments}
+        return {}
+
+    return api
+
+
+def test_cleanup_window_is_60_seconds_and_the_heuristic_can_be_switched_off(tmp_path, monkeypatch):
+    import time
+
+    from anli_classification.rl_train import delete_run_resources
+
+    monkeypatch.setenv("FIREWORKS_API_KEY", "k")
+    started = time.time()
+
+    def stamp(offset):
+        return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(started + offset))
+
+    deployments = [
+        {"name": "accounts/a/deployments/early", "baseModel": "m", "createTime": stamp(-90)},
+        {"name": "accounts/a/deployments/just-before", "baseModel": "m", "createTime": stamp(-30)},
+    ]
+    calls = []
+    delete_run_resources(tmp_path, started, "m", api=_cleanup_api([], deployments, calls))
+    assert [p for m, p in calls if m == "DELETE"] == ["accounts/a/deployments/just-before?ignoreChecks=true"]
+
+    (tmp_path / "trainer_job.json").write_text(json.dumps({"trainer_job_id": "job1"}))
+    calls.clear()
+    delete_run_resources(tmp_path, started, "m", api=_cleanup_api([], deployments, calls), deployment_id="mine",
+                         heuristic=False)
+    assert [p for m, p in calls if m == "DELETE"] == [
+        "accounts/a/rlorTrainerJobs/job1", "accounts/a/deployments/mine?ignoreChecks=true"]
+    assert not any(m == "GET" and "deployments" in p for m, p in calls)  # nothing was listed, so nothing was guessed

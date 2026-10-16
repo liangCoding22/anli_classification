@@ -216,6 +216,10 @@ anli-rl-train \
   --log-path ./anli-rl-logs/n50000-v2
 ```
 
+The same run is one flag now: `anli-rl-train --recipe v2 --pool-path ... --training-shape ... --log-path ...`. Recipes
+(`rl/recipes.py`) are named sets of flags used as defaults, explicit flags still win, and `legacy` (the default) changes
+nothing. `tests/test_recipes.py` checks `v2` against the run's recorded `run_config.json`.
+
 Defaults that applied: temperature 1.0, 4096 completion tokens, full-parameter (`--lora-rank 0`), eval temperature
 0.0, sampling timeout 300 s, delete-on-failure on, promotable intermediate checkpoints on.
 
@@ -292,6 +296,16 @@ unchanged; equal-reward groups stay at zero advantage.
   trainer and deployment it created. `--weight-sync-timeout` (default 1800 s) is how long the cookbook waits for a
   hot-loaded snapshot. Delete-on-failure also runs on a crash, and finds a trainer that was created but never wrote
   `trainer_job.json` (still pending) by creation time and base model.
+- Every run ends by writing `run_result.json` (`status`: completed, stopped, failed or stalled; `stop_reason`:
+  max_steps, filter_ratio or class_drop; the final step; job ids; recipe; git commit), so tools need not parse the log.
+  `run_config.json` also records the git commit and whether the tree was dirty.
+- Cleanup deletes the recorded trainer and `--deployment-id` for certain. A trainer or deployment the run created but never
+  recorded can only be found by creation time (within 60 s before the run started or later, on the base model). That guess
+  can match someone else's resource on a shared account, so each match is logged as "matched by creation time" and
+  `--no-cleanup-heuristic` turns it off.
+- The cookbook has no stop hook, so a guard ends a run by raising `StopAtStep`, a `BaseException`, from the evaluation
+  function (the cookbook swallows ordinary exceptions there). `tests/test_cookbook_contract.py` checks this against the
+  installed cookbook; run it where the cookbook is importable.
 - With `--skip-cleanup` the trainer and deployment stay up after the run (so a run can be resumed or checkpoints
   promoted) and keep billing until deleted.
 
