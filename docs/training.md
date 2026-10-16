@@ -140,6 +140,10 @@ parseable answer with no reasoning like an inconsistent one (verdict `no_reasoni
 exploited (malformed fell from about 1.5% to 0%, no-reasoning stayed near 0%), so they were a latent incentive, not an
 observed one. Runs without a penalty are unaffected by the version.
 
+**v3 has not been used in a training run.** It has unit tests only, so its effect on results is unmeasured. v2 is the default
+in the CLI, in `make_rollout_fn`, in `training_reward` and in the `v2` recipe, and `tests/test_reward_default.py` pins that,
+together with the exact v2 reward values, so the v2 run stays reproducible.
+
 Evaluation and the `outcome` field in `rollouts.jsonl` use the strict label reward only; the shaped reward is logged as
 `reward`, the strict one as `label_reward`, the verdict as `judge_verdict`.
 
