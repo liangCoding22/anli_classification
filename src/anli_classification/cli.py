@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import sys
 from pathlib import Path
 from typing import Optional, Sequence
 
@@ -14,6 +15,7 @@ from anli_classification.metrics import MetricsCalculator, format_metrics_line, 
 from anli_classification.parsers import LabelParser
 from anli_classification.prompts import PROMPTS, NliPromptV3
 from anli_classification.rendering import DEFAULT_TOKENIZER_MODEL, ChatTemplateRenderer
+from anli_classification.run_spec import SPEC_FILE as SPEC_NOTE, RunSpec, RunSpecMismatch, ensure_run_spec
 
 
 def build_backend(config: RunConfig) -> ChatBackend:
@@ -67,6 +69,10 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> RunConfig:
     )
     parser.add_argument("--tokenizer-model", default=DEFAULT_TOKENIZER_MODEL,
                         help="HF tokenizer whose chat template --template client applies")
+    parser.add_argument("--run-tag", default=None,
+                        help="write results to a separate folder (<prompt>--TAG), for the same model and prompt "
+                             "with other sampling settings; cached results made with different settings are "
+                             "otherwise refused")
     args = parser.parse_args(argv)
     if args.samples < 1:
         parser.error("--samples must be at least 1")
@@ -92,11 +98,20 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> RunConfig:
         output_dir=Path(args.output_dir),
         template=args.template,
         tokenizer_model=args.tokenizer_model,
+        run_tag=args.run_tag,
     )
 
 
 def main(argv: Optional[Sequence[str]] = None) -> None:
     config = parse_args(argv)
+    try:
+        status = ensure_run_spec(config.run_dir, RunSpec.from_config(config))
+    except RunSpecMismatch as error:
+        raise SystemExit(str(error))
+    if status == "legacy":
+        print(f"warning: {config.run_dir} has cached predictions but no {SPEC_NOTE}, so their sampling settings "
+              "are unknown; they are reused as they are. Use --run-tag NAME to keep this run's results separate.",
+              file=sys.stderr)
     dataset = AnliDataset()
     slices = {
         f"{split}_{round_id}": dataset.load(split, round_id, config.limit, config.seed)
