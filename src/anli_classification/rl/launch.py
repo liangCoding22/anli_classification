@@ -10,7 +10,7 @@ import time
 from pathlib import Path
 from typing import Any, Optional
 
-from anli_classification.rl.defaults import CONFIG_FILE, METRICS_FILE, ROLLOUTS_FILE
+from anli_classification.rl.defaults import CONFIG_FILE, METRICS_FILE, RESULT_FILE, ROLLOUTS_FILE, TRAINER_JOB_FILE
 
 
 def code_version() -> dict[str, Any]:
@@ -24,6 +24,35 @@ def code_version() -> dict[str, Any]:
     sha = git("rev-parse", "HEAD")
     status = git("status", "--porcelain")
     return {"git_sha": sha.strip() if sha else None, "dirty": bool(status.strip()) if status is not None else None}
+
+
+def write_run_result(
+    log_dir: Path,
+    status: str,
+    *,
+    stop_reason: Optional[str] = None,
+    final_step: Optional[int] = None,
+    error: Optional[str] = None,
+    args: Optional[argparse.Namespace] = None,
+) -> None:
+    """Record how the run ended, for tools that would otherwise parse the log.
+
+    status: "completed" (the loop finished), "stopped" (a guard or the step cap ended it; stop_reason says which),
+    "failed" (an exception) or "stalled" (the watchdog ended it).
+    """
+    job_file = log_dir / TRAINER_JOB_FILE
+    record = {
+        "status": status,
+        "stop_reason": stop_reason,
+        "final_step": final_step,
+        "error": error,
+        "trainer_job_id": json.loads(job_file.read_text()).get("trainer_job_id") if job_file.exists() else None,
+        "deployment_id": getattr(args, "deployment_id", None),
+        "recipe": getattr(args, "recipe", None),
+        "code": code_version(),
+    }
+    log_dir.mkdir(parents=True, exist_ok=True)
+    (log_dir / RESULT_FILE).write_text(json.dumps(record, indent=2))
 
 
 def write_run_config(args: argparse.Namespace, log_dir: Path, train_rows: list[dict], dev_rows: list[dict]) -> None:

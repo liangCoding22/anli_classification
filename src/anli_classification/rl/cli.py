@@ -43,7 +43,7 @@ from anli_classification.rl.defaults import (
 )
 from anli_classification.rl.dev_metrics import dev_accuracy
 from anli_classification.rl.guards import print_eval
-from anli_classification.rl.launch import build_config, resolve_training_shape, write_run_config
+from anli_classification.rl.launch import build_config, resolve_training_shape, write_run_config, write_run_result
 from anli_classification.rl.recipes import RECIPES
 from anli_classification.rl.logs import FormatTracker, RolloutLog
 from anli_classification.rl.reward import ConsistencyJudge, floored_advantages
@@ -94,6 +94,7 @@ def run_rl(args: argparse.Namespace) -> dict[str, Any]:
     )
     started_at = time.time()
     start_stall_watchdog(args, log_dir, started_at)
+    stop_reason = None
     try:
         result = main(
             config,
@@ -111,11 +112,15 @@ def run_rl(args: argparse.Namespace) -> dict[str, Any]:
         )
     except StopAtStep as stop:
         result = {"steps": stop.step}
+        stop_reason = stop.reason
         print(f"Stopped at step {stop.step} (--max-steps {args.max_steps})")
-    except Exception:
+        print(f"Stop reason: {stop.reason}", flush=True)
+    except Exception as error:
+        write_run_result(log_dir, "failed", error=f"{type(error).__name__}: {error}", args=args)
         if args.delete_on_failure:
             try:
-                for line in delete_run_resources(log_dir, started_at, args.base_model, deployment_id=args.deployment_id):
+                for line in delete_run_resources(log_dir, started_at, args.base_model, deployment_id=args.deployment_id,
+                                                 heuristic=args.cleanup_heuristic):
                     print(f"FAILURE CLEANUP: {line}", flush=True)
             except Exception as cleanup_error:
                 print(f"FAILURE CLEANUP FAILED, delete the trainer and deployment yourself: {cleanup_error}", flush=True)
@@ -126,6 +131,8 @@ def run_rl(args: argparse.Namespace) -> dict[str, Any]:
     # The cookbook saves the final checkpoint as step-<global_step> when any step was trained.
     final_checkpoint = f"step-{result['steps']}" if result.get("steps") else None
     write_summary(log_dir, final_checkpoint)
+    write_run_result(log_dir, "stopped" if stop_reason else "completed", stop_reason=stop_reason,
+                     final_step=result.get("steps"), args=args)
     return result
 
 
@@ -173,6 +180,10 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
                         help="keep trainer and deployment running (--no-skip-cleanup overrides a recipe)")
     parser.add_argument("--delete-on-failure", action=argparse.BooleanOptionalAction, default=True,
                         help="if the run crashes, delete its trainer job and deployment so they stop billing")
+    parser.add_argument("--cleanup-heuristic", action=argparse.BooleanOptionalAction, default=True,
+                        help="when cleaning up after a failure or stall, also delete a trainer or deployment found by "
+                             "creation time that the run never recorded (can match someone else's on a shared account; "
+                             "--no-cleanup-heuristic deletes only recorded ids)")
     parser.add_argument("--weight-sync-timeout", type=int, default=WEIGHT_SYNC_TIMEOUT_S,
                         help="seconds to wait for the deployment to load each new snapshot")
     parser.add_argument("--class-drop-alert", type=float, default=CLASS_DROP_ALERT,

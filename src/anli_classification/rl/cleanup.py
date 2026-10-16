@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any
 from typing import Optional
 
+from anli_classification.rl.launch import write_run_result
 from anli_classification.rl.defaults import METRICS_FILE, ROLLOUTS_FILE, TRAINER_JOB_FILE
 from anli_classification.rl.guards import StallWatchdog
 
@@ -27,7 +28,13 @@ def _fireworks_api(method: str, path: str, api_key: str, base_url: str) -> Any:
 
 
 def delete_run_resources(
-    log_dir: Path, started_at: float, base_model: str, api: Any = _fireworks_api, deployment_id: Optional[str] = None
+    log_dir: Path,
+    started_at: float,
+    base_model: str,
+    api: Any = _fireworks_api,
+    deployment_id: Optional[str] = None,
+    heuristic: bool = True,
+    window_s: float = 60.0,
 ) -> list[str]:
     """Delete the trainer job and the deployment this run created, so a crashed run stops billing.
 
@@ -36,11 +43,17 @@ def delete_run_resources(
     `started_at`); deployments are those on `base_model` created after `started_at`,
     plus `deployment_id` when the run reattached to an older one.
     Every step is best effort and reported, so a failed delete never hides the original error.
+
+    What is deleted for certain: the trainer recorded in `trainer_job.json`, and `deployment_id` when given. The
+    cookbook cannot be told ids in advance, so a trainer or deployment the run created but never recorded can only be
+    found by creation time: on `base_model`, created within `window_s` seconds before the run started or later. That
+    guess can match someone else's resource on a shared account, so each match is listed as "matched by creation time"
+    before it is deleted, and `heuristic=False` (--no-cleanup-heuristic) turns it off.
     """
     api_key = os.environ["FIREWORKS_API_KEY"]
     base_url = os.environ.get("FIREWORKS_BASE_URL", "https://api.fireworks.ai")
     call = functools.partial(api, api_key=api_key, base_url=base_url)
-    since = datetime.fromtimestamp(started_at, timezone.utc) - timedelta(minutes=2)
+    since = datetime.fromtimestamp(started_at, timezone.utc) - timedelta(seconds=window_s)
     done: list[str] = []
 
     def delete(path: str) -> None:
@@ -54,19 +67,21 @@ def delete_run_resources(
     job_file = log_dir / TRAINER_JOB_FILE
     if job_file.exists():
         delete(f"{account}/rlorTrainerJobs/{json.loads(job_file.read_text())['trainer_job_id']}")
-    else:  # the file is written once the trainer is up, so a run that never got a GPU has no record of its job
+    elif heuristic:  # the file is written once the trainer is up, so a run that never got a GPU has no record of its job
         for job in call("GET", f"{account}/rlorTrainerJobs?pageSize=100").get("rlorTrainerJobs", []):
             created = datetime.fromisoformat(job["createTime"].replace("Z", "+00:00"))
             if (job.get("state") != "JOB_STATE_DELETED" and created >= since
                     and job.get("trainingConfig", {}).get("baseModel") == base_model):
+                done.append(f"matched by creation time (not recorded): {job['name']}")
                 delete(job["name"])
     if deployment_id:
         delete(f"{account}/deployments/{deployment_id}?ignoreChecks=true")
-    for deployment in call("GET", f"{account}/deployments?pageSize=100").get("deployments", []):
+    for deployment in (call("GET", f"{account}/deployments?pageSize=100").get("deployments", []) if heuristic else []):
         if deployment_id and deployment["name"].endswith(f"/{deployment_id}"):
             continue
         created = datetime.fromisoformat(deployment["createTime"].replace("Z", "+00:00"))
         if deployment.get("baseModel") == base_model and created >= since:
+            done.append(f"matched by creation time (not recorded): {deployment['name']}")
             delete(f"{deployment['name']}?ignoreChecks=true")
     return done
 
@@ -80,10 +95,12 @@ def start_stall_watchdog(args: argparse.Namespace, log_dir: Path, started_at: fl
         print(f"STALL: no rollouts or metrics for {args.stall_timeout}s; stopping the run", flush=True)
         if args.delete_on_failure:
             try:
-                for line in delete_run_resources(log_dir, started_at, args.base_model, deployment_id=args.deployment_id):
+                for line in delete_run_resources(log_dir, started_at, args.base_model, deployment_id=args.deployment_id,
+                                                 heuristic=getattr(args, "cleanup_heuristic", True)):
                     print(f"STALL CLEANUP: {line}", flush=True)
             except Exception as error:
                 print(f"STALL CLEANUP FAILED, delete the trainer and deployment yourself: {error}", flush=True)
+        write_run_result(log_dir, "stalled", error=f"no rollouts or metrics for {args.stall_timeout}s", args=args)
         os._exit(1)  # the main thread is stuck inside the cookbook loop, so it cannot be interrupted cleanly
 
     watchdog = StallWatchdog([log_dir / ROLLOUTS_FILE, log_dir / METRICS_FILE], args.stall_timeout)

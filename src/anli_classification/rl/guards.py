@@ -73,18 +73,21 @@ def print_eval(
                     print(f"Stopping at step {step}: {label} dev recall fell {drop:.3f} below the first evaluation "
                           f"(limit {stop_class_drop:.3f})", flush=True)
                     class_stop = True
-        stop = class_stop or (max_steps is not None and step >= max_steps)
+        at_step_cap = max_steps is not None and step >= max_steps
+        stop = class_stop or at_step_cap
+        reason = "class_drop" if class_stop else ("max_steps" if at_step_cap else None)
         if not stop and stop_filter_ratio is not None and metrics_path is not None:
             ratio = recent_filter_ratio(metrics_path, filter_window)
             if ratio is not None and ratio > stop_filter_ratio:
                 print(f"Stopping at step {step}: filter ratio {ratio:.0%} over the last {filter_window} steps "
                       f"exceeds {stop_filter_ratio:.0%}", flush=True)
                 stop = True
+                reason = "filter_ratio"
         if stop:
             from training.utils.logging import log_metrics
 
             log_metrics(metrics, step=step)  # the cookbook would log this after the hook returns
-            raise StopAtStep(step)
+            raise StopAtStep(step, reason or "max_steps")
         return metrics
 
     return wrapped
