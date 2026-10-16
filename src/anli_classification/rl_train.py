@@ -21,19 +21,21 @@ from __future__ import annotations
 
 import argparse
 import functools
-import math
 import json
 import os
 import re
 import threading
 import time
+from collections import Counter
+import urllib.request
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Optional, Sequence
 
 from anli_classification.parsers import LabelParser, is_well_formed, unparsed_reason
 from anli_classification.rl_summary import write_summary
 from anli_classification.prompts import PROMPTS, NliPromptV3
-from anli_classification.schemas import Example
+from anli_classification.schemas import LABELS, Example
 from anli_classification.config import DEFAULT_MODEL
 
 # Settings from the cookbook's DeepMath example (qwen3-4b, 8 completions per prompt),
@@ -48,7 +50,13 @@ COMPLETIONS_PER_PROMPT = 8  # rollouts per prompt (the GRPO group size)
 PROMPT_GROUPS_PER_STEP = 64  # prompts per optimizer step
 LEARNING_RATE = 1e-5
 TEMPERATURE = 1.0
+EVAL_TEMPERATURE = 0.0  # dev evaluation is greedy; the cookbook would reuse the training temperature
 MAX_COMPLETION_TOKENS = 4096
+DEV_ROWS = 1000  # about 330 per class, so per-class recall has a standard error near 2.6 points
+JUDGE_MODEL = "accounts/fireworks/models/gpt-oss-120b"  # serverless; tested on 120 real rollouts, 4 flagged, all genuine
+JUDGE_MAX_CHARS = 16000  # reasoning longer than this keeps its first 3000 and last 12000 characters
+ADVANTAGE_STD_FLOOR = 0.2  # binary groups with >= 1 success in 16 have std >= 0.25, so only penalty-only groups are affected
+CLASS_DROP_ALERT = 0.05  # alert when a class's dev recall falls this far below the run's first evaluation
 DCP_SAVE_INTERVAL = 2  # resumable checkpoint every 2 optimizer steps
 
 # Metrics to watch in the logs or W&B (names as the cookbook's async reference documents them;
@@ -87,7 +95,8 @@ def load_pool_rows(pool_path: Path, prompt_version: str = NliPromptV3.VERSION) -
             label=record["gold"],
             reason=record.get("reason", ""),
         )
-        rows.append({"key": record["key"], "gold": record["gold"], "messages": prompt.build(example)})
+        rows.append({"key": record["key"], "gold": record["gold"], "messages": prompt.build(example),
+                     "premise": record["premise"], "hypothesis": record["hypothesis"]})
     return rows
 
 
@@ -104,6 +113,7 @@ def dev_accuracy(
     rows: Sequence[dict[str, Any]],
     runs_by_row: Sequence[Sequence[Any]],
     formats: Optional[dict[str, str]] = None,
+    preds: Optional[dict[str, Optional[int]]] = None,
 ) -> dict[str, float]:
     """Dev metrics. A run's reward is 1.0 when its answer is correct, 0.0 otherwise.
 
@@ -112,6 +122,11 @@ def dev_accuracy(
     expected rollouts; `dev/valid_accuracy` is over the rollouts that returned an answer. `dev/strict_accuracy` is over the same rollouts and also needs a parsed answer.
     `formats` maps each row key to its parse status ('parsed' or an unparsed reason), recorded by the
     eval rollouts. It is cleared after each evaluation.
+
+    `preds` maps each row key to the label the eval rollout predicted (None when unparsed). With it, the
+    metrics also hold per-class recall, each class's share of predictions, and macro-F1, so a class
+    trade-off that leaves `dev/accuracy` unchanged is visible. A failed rollout counts as incorrect
+    and as no prediction. It is cleared after each evaluation.
     """
     runs = [run for row_runs in runs_by_row for run in row_runs]
     scored = [run for run in runs if run is not None]
@@ -140,7 +155,152 @@ def dev_accuracy(
                 and formats.get(row["key"], "parsed") == "parsed") / len(runs)
         ) if runs else 0.0
         formats.clear()
+    if preds is not None:
+        metrics.update(class_metrics(rows, runs_by_row, preds))
+        preds.clear()
     return metrics
+
+
+def class_metrics(
+    rows: Sequence[dict[str, Any]],
+    runs_by_row: Sequence[Sequence[Any]],
+    preds: dict[str, Optional[int]],
+) -> dict[str, float]:
+    """Per-class recall, predicted share and macro-F1 over the dev rows (one rollout per row)."""
+    n_classes = len(LABELS)
+    gold_count = [0] * n_classes
+    hits = [0] * n_classes
+    predicted = [0] * n_classes
+    for row, row_runs in zip(rows, runs_by_row):
+        gold = row["gold"]
+        gold_count[gold] += 1
+        run = row_runs[0] if row_runs else None
+        pred = preds.get(row["key"]) if run is not None else None
+        if pred is not None:
+            predicted[pred] += 1
+            hits[gold] += pred == gold
+    total = sum(gold_count)
+    metrics: dict[str, float] = {}
+    f1s = []
+    for i, label in enumerate(LABELS):
+        recall = hits[i] / gold_count[i] if gold_count[i] else 0.0
+        precision = hits[i] / predicted[i] if predicted[i] else 0.0
+        f1s.append(2 * precision * recall / (precision + recall) if precision + recall else 0.0)
+        metrics[f"dev/recall_{label}"] = recall
+        metrics[f"dev/predicted_share_{label}"] = predicted[i] / total if total else 0.0
+    metrics["dev/macro_f1"] = sum(f1s) / n_classes
+    return metrics
+
+
+JUDGE_SYSTEM = (
+    "You check a model's reasoning about a natural language inference problem. You are given the premise, the "
+    "hypothesis, the model's full reasoning, and the label the model finally output. Decide whether the reasoning "
+    "actually arrives at that label. Reply with one line: '<verdict> <label>' where verdict is consistent (the "
+    "reasoning concludes the output label), inconsistent (the reasoning concludes a different label), or unclear "
+    "(it never settles on one label), and label is the label the reasoning itself concludes (entailment, neutral, "
+    "contradiction) or none. Do not judge whether the label is correct."
+)
+_JUDGE_VERDICT = re.compile(r"^\W*(inconsistent|consistent|unclear)\b", re.IGNORECASE)
+
+
+def judge_prompt(premise: str, hypothesis: str, thinking: str, label: str) -> str:
+    if len(thinking) > JUDGE_MAX_CHARS:
+        thinking = thinking[:3000] + "\n[...]\n" + thinking[-12000:]
+    return (f"Premise:\n{premise}\n\nHypothesis:\n{hypothesis}\n\nModel's reasoning:\n{thinking}\n\n"
+            f"Label the model output: {label}")
+
+
+def parse_judge_reply(text: Optional[str]) -> Optional[str]:
+    """'consistent', 'inconsistent' or 'unclear' from the judge's first word; None when it says anything else.
+
+    Only the verdict is used. The label the judge adds is logged by nobody: on one test case it contradicted its own verdict.
+    """
+    match = _JUDGE_VERDICT.match(text or "")
+    return match.group(1).lower() if match else None
+
+
+def floored_advantages(rewards: Sequence[float], std_floor: float = ADVANTAGE_STD_FLOOR, eps: float = 1e-8) -> list[float]:
+    """The cookbook's group-normalised advantages, but never dividing by a spread below `std_floor`.
+
+    GRPO divides each reward's distance from the group mean by the group's standard deviation. When a small
+    reward term (the consistency penalty) is the only difference inside a group, that division stretches it to
+    the size of a full right-versus-wrong difference. The floor keeps such a term in proportion to its size.
+    Groups with equal rewards still get zero advantage, and `std_floor` 0 reproduces the cookbook.
+    """
+    n = len(rewards)
+    mean = sum(rewards) / n
+    std = (sum((r - mean) ** 2 for r in rewards) / (n - 1)) ** 0.5 if n > 1 else 0.0
+    if std < eps:
+        return [0.0] * n
+    return [(r - mean) / (max(std, std_floor) + eps) for r in rewards]
+
+
+def shaped_reward(label_reward_value: float, verdict: Optional[str], penalty: float) -> float:
+    """The label reward, minus `penalty` when the judge found the reasoning concluding a different label.
+
+    The term differs between samples of one prompt, so it survives the cookbook's per-group z-scoring.
+    """
+    return label_reward_value - (penalty if verdict == "inconsistent" else 0.0)
+
+
+class ConsistencyJudge:
+    """Asks an LLM whether a rollout's reasoning arrives at the label it output. Fails open.
+
+    The judge sees the premise, hypothesis, full reasoning and the model's output label, never the gold label.
+    Any error, timeout or unparseable reply gives no verdict (so no penalty) and is counted, so a judge outage
+    cannot stop or distort training. Replies are cached by input.
+    """
+
+    def __init__(self, model: str = JUDGE_MODEL, post: Any = None, report_every: int = 500) -> None:
+        self.model = model
+        self.post = post or self._post
+        self.report_every = report_every
+        self.stats: Counter = Counter()
+        self._cache: dict[str, Optional[str]] = {}
+        self._lock = threading.Lock()
+
+    def _post(self, body: dict) -> dict:
+        base_url = os.environ.get("FIREWORKS_BASE_URL", "https://api.fireworks.ai")
+        request = urllib.request.Request(
+            f"{base_url}/inference/v1/chat/completions", data=json.dumps(body).encode(), method="POST",
+            headers={"Authorization": f"Bearer {os.environ['FIREWORKS_API_KEY']}", "Content-Type": "application/json"},
+        )
+        with urllib.request.urlopen(request, timeout=60) as response:
+            return json.loads(response.read())
+
+    def verdict(self, premise: str, hypothesis: str, thinking: str, label: str) -> Optional[str]:
+        prompt = judge_prompt(premise, hypothesis, thinking, label)
+        with self._lock:
+            if prompt in self._cache:
+                self.stats["cache_hits"] += 1
+                return self._cache[prompt]
+        body = {"model": self.model, "temperature": 0, "max_tokens": 300, "reasoning_effort": "low",
+                "messages": [{"role": "system", "content": JUDGE_SYSTEM}, {"role": "user", "content": prompt}]}
+        result: Optional[str] = None
+        for attempt in range(3):
+            try:
+                reply = self.post(body)["choices"][0]["message"].get("content")
+                result = parse_judge_reply(reply)
+                if result is None:
+                    self.stats["unparsed"] += 1
+                break
+            except Exception:
+                if attempt == 2:
+                    self.stats["errors"] += 1
+                else:
+                    time.sleep(1.5 * (attempt + 1))
+        with self._lock:
+            self._cache[prompt] = result
+            self.stats["calls"] += 1
+            self.stats[result or "none"] += 1
+            if self.stats["calls"] % self.report_every == 0:
+                print(self.summary(), flush=True)
+        return result
+
+    def summary(self) -> str:
+        s = self.stats
+        return (f"JUDGE: {s['calls']} calls, inconsistent {s['inconsistent']}, unclear {s['unclear']}, "
+                f"errors {s['errors']}, unparsed {s['unparsed']}")
 
 
 def thinking_text(message: Any) -> str:
@@ -224,10 +384,15 @@ def make_rollout_fn(
     rollout_log: Optional[RolloutLog] = None,
     format_tracker: Optional[FormatTracker] = None,
     eval_formats: Optional[dict[str, str]] = None,
+    eval_temperature: Optional[float] = EVAL_TEMPERATURE,
+    eval_preds: Optional[dict[str, Optional[int]]] = None,
+    consistency_judge: Optional[ConsistencyJudge] = None,
+    consistency_penalty: float = 0.0,
 ) -> Any:
     """Single-turn rollout: one sampled answer per call, graded by `label_reward`.
 
-    `evaluation` is True for dev evaluation rollouts; each graded rollout is written to
+    `evaluation` is True for dev evaluation rollouts, which sample at `eval_temperature` (None keeps the
+    training temperature); each graded rollout is written to
     `rollout_log` with its completion text, so failures can be inspected later.
     Mirrors the cookbook's DeepMath example; the cookbook imports are local to this function.
     """
@@ -239,29 +404,42 @@ def make_rollout_fn(
 
     renderer = build_renderer(setup.tokenizer, setup.tokenizer_id, renderer_name, load_image_processor=False)
     sampler = setup.sampler  # borrowed from the recipe; do not close
+    eval_sample_kwargs = (
+        setup.sample_kwargs if eval_temperature is None else {**setup.sample_kwargs, "temperature": eval_temperature}
+    )
 
     async def rollout_fn(row: dict, evaluation: bool = False) -> Any:
         async def grade(row_: dict, message: Any, _parse_success: bool) -> float:
             completion = get_text_content(message)
-            reward = await asyncio.to_thread(label_reward, completion, row_["gold"])
+            label_value = await asyncio.to_thread(label_reward, completion, row_["gold"])
+            pred = LabelParser().parse(completion)
+            thinking = thinking_text(message)
+            verdict = None
+            if consistency_judge is not None and not evaluation and pred is not None and thinking:
+                verdict = await asyncio.to_thread(
+                    consistency_judge.verdict, row_.get("premise", ""), row_.get("hypothesis", ""), thinking, LABELS[pred]
+                )
+            reward = shaped_reward(label_value, verdict, consistency_penalty)  # evaluation never gets a judge
             well_formed = is_well_formed(completion)
             parse_status = unparsed_reason(completion) or "parsed"
             if format_tracker is not None and not evaluation:
                 format_tracker.record(well_formed)
             if eval_formats is not None and evaluation:
                 eval_formats[row_["key"]] = parse_status
+            if eval_preds is not None and evaluation:
+                eval_preds[row_["key"]] = pred
             if rollout_log is not None:
-                pred = LabelParser().parse(completion)
-                thinking = thinking_text(message)
                 rollout_log.write({
                     "split": "eval" if evaluation else "train",
                     "key": row_["key"],
                     "gold": row_["gold"],
                     "pred": pred,
                     "reward": reward,
+                    "label_reward": label_value,
+                    "judge_verdict": verdict,
                     "well_formed": well_formed,
                     "parse_status": parse_status,
-                    "outcome": "correct" if reward == 1.0 else ("incorrect" if well_formed else "invalid"),
+                    "outcome": "correct" if label_value == 1.0 else ("incorrect" if well_formed else "invalid"),
                     "completion": completion,
                     "thinking": thinking,
                     "thinking_chars": len(thinking),
@@ -274,7 +452,7 @@ def make_rollout_fn(
             sample_with_prompt_tokens=sampler.sample_with_prompt_tokens,
             message_builder=lambda r: prepare_sampling_messages(r.get("messages", [])),
             reward_fn=grade,
-            sample_kwargs=setup.sample_kwargs,
+            sample_kwargs=eval_sample_kwargs if evaluation else setup.sample_kwargs,
             tokenizer=setup.tokenizer,
         )
 
@@ -303,21 +481,20 @@ def build_config(args: argparse.Namespace, n_rows: int) -> Any:
         learning_rate=args.learning_rate,
         completions_per_prompt=args.completions_per_prompt,
         prompt_groups_per_step=args.prompt_groups_per_step,
-        epochs=args.epochs if args.max_steps is None else epochs_for_steps(
-            args.max_steps, args.prompt_groups_per_step, n_rows, args.epochs
-        ),
+        epochs=args.epochs,
         max_rows=n_rows,
         max_completion_tokens=args.max_completion_tokens,
         temperature=args.temperature,
         lora_rank=args.lora_rank,
         dcp_save_interval=args.checkpoint_interval,
         cleanup_on_exit=not args.skip_cleanup,
+        weight_sync_timeout=args.weight_sync_timeout,
         output_model_id=args.output_model_id,
         trainer=TrainerConfig(job_id=args.policy_job_id, training_shape_id=args.training_shape or None),
         deployment=DeployConfig(
             deployment_id=args.deployment_id,
             tokenizer_model=args.tokenizer_model,
-            sample_timeout=1200,
+            sample_timeout=args.sample_timeout,
         ),
         wandb=WandBConfig(
             entity=args.wandb_entity,
@@ -352,18 +529,74 @@ class StopAtStep(BaseException):
         self.step = step
 
 
-def print_eval(evaluation_fn: Any, max_steps: Optional[int] = None) -> Any:
+def recent_filter_ratio(metrics_path: Path, window: int) -> Optional[float]:
+    """Mean `rollout/filter_ratio` over the last `window` logged steps, or None until `window` steps exist."""
+    if not metrics_path.exists():
+        return None
+    ratios = []
+    for line in metrics_path.read_text().splitlines():
+        if line.strip():
+            record = json.loads(line)
+            if "rollout/filter_ratio" in record:
+                ratios.append(record["rollout/filter_ratio"])
+    if len(ratios) < window:
+        return None
+    return sum(ratios[-window:]) / window
+
+
+def print_eval(
+    evaluation_fn: Any,
+    max_steps: Optional[int] = None,
+    stop_filter_ratio: Optional[float] = None,
+    metrics_path: Optional[Path] = None,
+    filter_window: int = 3,
+    class_drop_alert: Optional[float] = None,
+    stop_class_drop: Optional[float] = None,
+) -> Any:
     """Print each dev evaluation as a JSON line, and stop training at `max_steps`.
+
+    With `stop_filter_ratio`, it also stops once the mean filter ratio of the last `filter_window` steps
+    exceeds it: most groups then have no reward variance, so further steps mostly pay for dropped rollouts.
+    The check runs at evaluation steps only, so set `--eval-interval` to match `--checkpoint-interval`
+    to have the stop step saved.
+
+    With `class_drop_alert`, it prints an ALERT when a class's dev recall falls that far below the run's
+    first evaluation (alert only). With `stop_class_drop`, a drop that large also stops the run, so the last
+    checkpoint before a class collapses is the one kept.
 
     The cookbook sends evaluation metrics only to W&B and to COOKBOOK_METRICS_FILE, so without
     a W&B login they would be dropped silently. The stop happens here because the eval hook runs
     after the step's checkpoint is saved; the cookbook's cleanup still runs on the way out.
     """
 
+    baseline: dict[str, float] = {}
+
     async def wrapped(step: int, rollout_fn: Any) -> dict[str, float]:
         metrics = await evaluation_fn(step, rollout_fn)
         print(json.dumps({"type": "eval", "step": step, **metrics}), flush=True)
-        if max_steps is not None and step >= max_steps:
+        class_stop = False
+        if class_drop_alert is not None or stop_class_drop is not None:
+            for label in LABELS:
+                key = f"dev/recall_{label}"
+                if key not in metrics:
+                    continue
+                baseline.setdefault(key, metrics[key])
+                drop = baseline[key] - metrics[key]
+                if class_drop_alert is not None and drop > class_drop_alert:
+                    print(f"ALERT: {label} dev recall {metrics[key]:.3f} is {drop:.3f} below the first evaluation "
+                          f"({baseline[key]:.3f}) at step {step}", flush=True)
+                if stop_class_drop is not None and drop > stop_class_drop:
+                    print(f"Stopping at step {step}: {label} dev recall fell {drop:.3f} below the first evaluation "
+                          f"(limit {stop_class_drop:.3f})", flush=True)
+                    class_stop = True
+        stop = class_stop or (max_steps is not None and step >= max_steps)
+        if not stop and stop_filter_ratio is not None and metrics_path is not None:
+            ratio = recent_filter_ratio(metrics_path, filter_window)
+            if ratio is not None and ratio > stop_filter_ratio:
+                print(f"Stopping at step {step}: filter ratio {ratio:.0%} over the last {filter_window} steps "
+                      f"exceeds {stop_filter_ratio:.0%}", flush=True)
+                stop = True
+        if stop:
             from training.utils.logging import log_metrics
 
             log_metrics(metrics, step=step)  # the cookbook would log this after the hook returns
@@ -382,6 +615,9 @@ def is_intermediate_checkpoint(name: str) -> bool:
     return _INTERMEDIATE_NAME.fullmatch(name) is not None
 
 
+SAMPLE_TIMEOUT_S = 300  # per sampling request; a hung connection should fail in minutes, not 20
+STALL_TIMEOUT_S = 1200  # kill the run when neither rollouts.jsonl nor metrics.jsonl changes for this long
+WEIGHT_SYNC_TIMEOUT_S = 1800  # how long the cookbook waits for the deployment to report a new snapshot (default 600)
 HOTLOAD_REQUEST_TIMEOUT_S = 900  # the SDK's default is 60 s, too short for the first base-snapshot hotload
 
 
@@ -438,13 +674,97 @@ def install_checkpoint_patches(log_dir: Path, promotable_checkpoints: bool) -> N
     cp.TrainingCheckpoints._anli_patched = True
 
 
-def epochs_for_steps(max_steps: int, prompt_groups_per_step: int, n_rows: int, epochs: int) -> int:
-    """Passes over the rows that leave room for `max_steps` optimizer steps, with a 3x margin.
+def _fireworks_api(method: str, path: str, api_key: str, base_url: str) -> Any:
+    request = urllib.request.Request(f"{base_url}/v1/{path}", method=method, headers={"Authorization": f"Bearer {api_key}"})
+    with urllib.request.urlopen(request, timeout=60) as response:
+        body = response.read()
+    return json.loads(body) if body else {}
 
-    Groups rejected by the zero-variance filter also use row draws, so the margin covers them.
+
+def delete_run_resources(
+    log_dir: Path, started_at: float, base_model: str, api: Any = _fireworks_api, deployment_id: Optional[str] = None
+) -> list[str]:
+    """Delete the trainer job and the deployment this run created, so a crashed run stops billing.
+
+    The cookbook only scales the deployment to zero on exit, and does nothing under --skip-cleanup. The trainer
+    comes from `trainer_job.json` (or, when that was never written, any trainer on `base_model` created after
+    `started_at`); deployments are those on `base_model` created after `started_at`,
+    plus `deployment_id` when the run reattached to an older one.
+    Every step is best effort and reported, so a failed delete never hides the original error.
     """
-    needed = math.ceil(3 * max_steps * prompt_groups_per_step / n_rows)
-    return max(epochs, needed)
+    api_key = os.environ["FIREWORKS_API_KEY"]
+    base_url = os.environ.get("FIREWORKS_BASE_URL", "https://api.fireworks.ai")
+    call = functools.partial(api, api_key=api_key, base_url=base_url)
+    since = datetime.fromtimestamp(started_at, timezone.utc) - timedelta(minutes=2)
+    done: list[str] = []
+
+    def delete(path: str) -> None:
+        try:
+            call("DELETE", path)
+            done.append(f"deleted {path}")
+        except Exception as exc:  # already gone or refused: report and carry on
+            done.append(f"could not delete {path}: {exc}")
+
+    account = call("GET", "accounts")["accounts"][0]["name"]
+    job_file = log_dir / TRAINER_JOB_FILE
+    if job_file.exists():
+        delete(f"{account}/rlorTrainerJobs/{json.loads(job_file.read_text())['trainer_job_id']}")
+    else:  # the file is written once the trainer is up, so a run that never got a GPU has no record of its job
+        for job in call("GET", f"{account}/rlorTrainerJobs?pageSize=100").get("rlorTrainerJobs", []):
+            created = datetime.fromisoformat(job["createTime"].replace("Z", "+00:00"))
+            if (job.get("state") != "JOB_STATE_DELETED" and created >= since
+                    and job.get("trainingConfig", {}).get("baseModel") == base_model):
+                delete(job["name"])
+    if deployment_id:
+        delete(f"{account}/deployments/{deployment_id}?ignoreChecks=true")
+    for deployment in call("GET", f"{account}/deployments?pageSize=100").get("deployments", []):
+        if deployment_id and deployment["name"].endswith(f"/{deployment_id}"):
+            continue
+        created = datetime.fromisoformat(deployment["createTime"].replace("Z", "+00:00"))
+        if deployment.get("baseModel") == base_model and created >= since:
+            delete(f"{deployment['name']}?ignoreChecks=true")
+    return done
+
+
+class StallWatchdog:
+    """Detects a run that has stopped making progress (e.g. hung connections) by watching its output files."""
+
+    def __init__(self, paths: Sequence[Path], timeout: float, clock: Any = time.time) -> None:
+        self.paths = list(paths)
+        self.timeout = timeout
+        self.clock = clock
+        self.started = clock()
+
+    def last_activity(self) -> float:
+        mtimes = [p.stat().st_mtime for p in self.paths if p.exists()]
+        return max([self.started, *mtimes])
+
+    def stalled(self) -> bool:
+        return self.clock() - self.last_activity() > self.timeout
+
+    def watch(self, on_stall: Any, interval: float = 30.0) -> None:
+        while not self.stalled():
+            time.sleep(interval)
+        on_stall()
+
+
+def start_stall_watchdog(args: argparse.Namespace, log_dir: Path, started_at: float) -> None:
+    """Background thread: on a stall, delete the run's cloud resources and end the process."""
+    if not args.stall_timeout:
+        return
+
+    def on_stall() -> None:
+        print(f"STALL: no rollouts or metrics for {args.stall_timeout}s; stopping the run", flush=True)
+        if args.delete_on_failure:
+            try:
+                for line in delete_run_resources(log_dir, started_at, args.base_model, deployment_id=args.deployment_id):
+                    print(f"STALL CLEANUP: {line}", flush=True)
+            except Exception as error:
+                print(f"STALL CLEANUP FAILED, delete the trainer and deployment yourself: {error}", flush=True)
+        os._exit(1)  # the main thread is stuck inside the cookbook loop, so it cannot be interrupted cleanly
+
+    watchdog = StallWatchdog([log_dir / ROLLOUTS_FILE, log_dir / METRICS_FILE], args.stall_timeout)
+    threading.Thread(target=watchdog.watch, args=(on_stall,), daemon=True).start()
 
 
 def run_rl(args: argparse.Namespace) -> dict[str, Any]:
@@ -471,30 +791,52 @@ def run_rl(args: argparse.Namespace) -> dict[str, Any]:
     install_checkpoint_patches(log_dir, args.promotable_checkpoints)
     install_hotload_timeout_patch()
     eval_formats: dict[str, str] = {}  # answer format per dev row, filled by the eval rollouts
+    eval_preds: dict[str, Optional[int]] = {}  # predicted label per dev row, filled by the eval rollouts
+    consistency_judge = ConsistencyJudge(args.consistency_judge_model) if args.consistency_penalty > 0 else None
 
     evaluation_fn = print_eval(
         max_steps=args.max_steps,
+        stop_filter_ratio=args.stop_filter_ratio,
+        metrics_path=log_dir / METRICS_FILE,
+        class_drop_alert=args.class_drop_alert,
+        stop_class_drop=args.stop_class_drop,
         evaluation_fn=make_heldout_evaluation(
             dev_rows,
             samples_per_row=1,
-            metrics_fn=functools.partial(dev_accuracy, formats=eval_formats),
+            metrics_fn=functools.partial(dev_accuracy, formats=eval_formats, preds=eval_preds),
             max_concurrency=args.concurrency,
         )
     )
+    started_at = time.time()
+    start_stall_watchdog(args, log_dir, started_at)
     try:
         result = main(
             config,
             rollout_fn_factory=functools.partial(
-                make_rollout_fn, rollout_log=rollout_log, format_tracker=format_tracker, eval_formats=eval_formats
+                make_rollout_fn, rollout_log=rollout_log, format_tracker=format_tracker, eval_formats=eval_formats,
+                eval_temperature=args.eval_temperature, eval_preds=eval_preds,
+                consistency_judge=consistency_judge, consistency_penalty=args.consistency_penalty,
             ),
             rows=rows,
             evaluation_fn=evaluation_fn,
             evaluation_interval=args.eval_interval,
+            **({"advantage_fn": functools.partial(floored_advantages, std_floor=args.advantage_std_floor)}
+               if args.advantage_std_floor > 0 else {}),
         )
     except StopAtStep as stop:
         result = {"steps": stop.step}
         print(f"Stopped at step {stop.step} (--max-steps {args.max_steps})")
+    except Exception:
+        if args.delete_on_failure:
+            try:
+                for line in delete_run_resources(log_dir, started_at, args.base_model, deployment_id=args.deployment_id):
+                    print(f"FAILURE CLEANUP: {line}", flush=True)
+            except Exception as cleanup_error:
+                print(f"FAILURE CLEANUP FAILED, delete the trainer and deployment yourself: {cleanup_error}", flush=True)
+        raise
     format_tracker.flush()
+    if consistency_judge is not None:
+        print(consistency_judge.summary(), flush=True)
     # The cookbook saves the final checkpoint as step-<global_step> when any step was trained.
     final_checkpoint = f"step-{result['steps']}" if result.get("steps") else None
     write_summary(log_dir, final_checkpoint)
@@ -516,6 +858,8 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     parser.add_argument("--completions-per-prompt", type=int, default=COMPLETIONS_PER_PROMPT)
     parser.add_argument("--learning-rate", type=float, default=LEARNING_RATE)
     parser.add_argument("--temperature", type=float, default=TEMPERATURE)
+    parser.add_argument("--eval-temperature", type=float, default=EVAL_TEMPERATURE,
+                        help="sampling temperature for dev evaluation (training uses --temperature)")
     parser.add_argument("--max-completion-tokens", type=int, default=MAX_COMPLETION_TOKENS)
     parser.add_argument("--lora-rank", type=int, default=0, help="0 = full-parameter")
     parser.add_argument("--checkpoint-interval", type=int, default=DCP_SAVE_INTERVAL)
@@ -523,17 +867,39 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
         "--promotable-checkpoints", action=argparse.BooleanOptionalAction, default=True,
         help="also save each intermediate checkpoint as a promotable model (default on; --no-... to disable)",
     )
-    parser.add_argument("--dev-rows", type=int, default=200, help="fixed dev_r3 subset for evaluation")
+    parser.add_argument("--dev-rows", type=int, default=DEV_ROWS, help="fixed dev_r3 subset for evaluation")
     parser.add_argument("--dev-seed", type=int, default=0)
     parser.add_argument("--eval-interval", type=int, default=5, help="evaluate on dev every N optimizer steps")
     parser.add_argument("--max-steps", type=int, default=None,
                         help="stop after this many optimizer steps (multiple of the checkpoint and eval intervals)")
+    parser.add_argument("--stop-filter-ratio", type=float, default=None,
+                        help="stop at an evaluation step when the last 3 steps' mean share of zero-variance "
+                             "groups exceeds this (off by default)")
     parser.add_argument("--concurrency", type=int, default=32, help="max concurrent dev rollouts")
     parser.add_argument("--format-alert-rate", type=float, default=0.05,
                         help="alert when this share of recent training answers breaks the one-word format")
     parser.add_argument("--log-path", default="./anli-rl-logs")
     parser.add_argument("--output-model-id", default=None, help="promote the final checkpoint to this id")
     parser.add_argument("--skip-cleanup", action="store_true", help="keep trainer and deployment running")
+    parser.add_argument("--delete-on-failure", action=argparse.BooleanOptionalAction, default=True,
+                        help="if the run crashes, delete its trainer job and deployment so they stop billing")
+    parser.add_argument("--weight-sync-timeout", type=int, default=WEIGHT_SYNC_TIMEOUT_S,
+                        help="seconds to wait for the deployment to load each new snapshot")
+    parser.add_argument("--class-drop-alert", type=float, default=CLASS_DROP_ALERT,
+                        help="print an ALERT when a class's dev recall falls this far below the first evaluation")
+    parser.add_argument("--advantage-std-floor", type=float, default=ADVANTAGE_STD_FLOOR,
+                        help="smallest group standard deviation GRPO divides by (0 = the cookbook's plain z-score)")
+    parser.add_argument("--stop-class-drop", type=float, default=None,
+                        help="stop at an evaluation where any class's dev recall is this far below the first evaluation")
+    parser.add_argument("--consistency-penalty", type=float, default=0.0,
+                        help="reward subtracted when an LLM judge finds the reasoning concluding a different label "
+                             "than the output (training rollouts only; 0 = off)")
+    parser.add_argument("--consistency-judge-model", default=JUDGE_MODEL)
+    parser.add_argument("--sample-timeout", type=int, default=SAMPLE_TIMEOUT_S,
+                        help="seconds before one sampling request is abandoned")
+    parser.add_argument("--stall-timeout", type=int, default=STALL_TIMEOUT_S,
+                        help="stop the run and delete its resources when no rollout or metric is written for this "
+                             "many seconds (0 = off)")
     parser.add_argument("--wandb-entity", default=os.environ.get("WANDB_ENTITY", ""))
     parser.add_argument("--wandb-project", default=os.environ.get("WANDB_PROJECT", "anli-rl"))
     args = parser.parse_args(argv)
@@ -543,6 +909,10 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
         parser.error("--epochs must be at least 1")
     if args.eval_interval < 1:
         parser.error("--eval-interval must be at least 1")
+    if args.consistency_penalty < 0:
+        parser.error("--consistency-penalty must be >= 0")
+    if args.stop_filter_ratio is not None and not 0 < args.stop_filter_ratio < 1:
+        parser.error("--stop-filter-ratio must be between 0 and 1")
     if args.max_steps is not None:
         if args.max_steps < 1:
             parser.error("--max-steps must be at least 1")
