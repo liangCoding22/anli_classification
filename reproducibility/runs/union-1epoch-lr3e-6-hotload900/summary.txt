@@ -1,0 +1,20 @@
+Training Summary
+----------------
+Unique training examples: 1493
+Epochs (planned): 1
+Attempted groups: 1493
+Accepted groups: 964
+Rejected all-correct: unavailable
+Rejected all-wrong: unavailable
+Acceptance rate: 0.6457
+Optimizer updates: 16
+Trained completion tokens (approx.): 4660753.0000
+Average completion tokens: 604.3508
+Truncation rate: 0.0001
+Train answers (malformed = not exactly one label word): rollouts 11944, well_formed 11913, malformed 31, malformed_rate 0.002595445411922304, parse_status {'parsed': 11913, 'not_one_label': 28, 'unclosed_think': 1, 'unbalanced_think': 2}, outcome {'correct': 7155, 'incorrect': 4758, 'invalid': 31}
+Eval answers: rollouts 1800, well_formed 1797, malformed 3, malformed_rate 0.0016666666666666668, parse_status {'parsed': 1797, 'not_one_label': 3}, outcome {'correct': 1234, 'incorrect': 563, 'invalid': 3}
+Format snapshots in metrics.jsonl: 24
+Initial dev accuracy: 0.6450 (step 0)
+Best dev accuracy: 0.7300 (step 16)
+Final dev accuracy: 0.7300 (step 16)
+Final checkpoint: step-16

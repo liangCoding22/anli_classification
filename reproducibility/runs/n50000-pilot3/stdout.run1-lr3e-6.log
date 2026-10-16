@@ -1,0 +1,21 @@
+Warning: You are sending unauthenticated requests to the HF Hub. Please set a HF_TOKEN to enable higher rate limits and faster downloads.
+{"type": "eval", "step": 0, "dev/accuracy": 0.658, "dev/valid_accuracy": 0.658, "dev/dropped_ratio": 0.0, "dev/rows": 500.0, "dev/strict_accuracy": 0.658, "dev/invalid_ratio": 0.008, "dev/incorrect_ratio": 0.334}
+{"type": "metrics", "step": 1, "reward": 0.5598958333333334}
+{"type": "metrics", "step": 2, "reward": 0.5325520833333334}
+{"type": "metrics", "step": 3, "reward": 0.5690104166666666}
+{"type": "metrics", "step": 4, "reward": 0.5611979166666666}
+{"type": "metrics", "step": 5, "reward": 0.6458333333333334}
+Sampler checkpoint name 'step-5-22153424' already used in this session — overwriting
+{"type": "eval", "step": 5, "dev/accuracy": 0.658, "dev/valid_accuracy": 0.658, "dev/dropped_ratio": 0.0, "dev/rows": 500.0, "dev/strict_accuracy": 0.658, "dev/invalid_ratio": 0.008, "dev/incorrect_ratio": 0.334}
+{"type": "metrics", "step": 6, "reward": 0.5807291666666666}
+{"type": "metrics", "step": 7, "reward": 0.5690104166666666}
+{"type": "metrics", "step": 8, "reward": 0.5677083333333334}
+{"type": "metrics", "step": 9, "reward": 0.5729166666666666}
+{"type": "metrics", "step": 10, "reward": 0.5026041666666666}
+Sampler checkpoint name 'step-10-22153424' already used in this session — overwriting
+{"type": "eval", "step": 10, "dev/accuracy": 0.652, "dev/valid_accuracy": 0.652, "dev/dropped_ratio": 0.0, "dev/rows": 500.0, "dev/strict_accuracy": 0.652, "dev/invalid_ratio": 0.0, "dev/incorrect_ratio": 0.348}
+{"type": "metrics", "step": 11, "reward": 0.5546875}
+{"type": "metrics", "step": 12, "reward": 0.4895833333333333}
+{"type": "metrics", "step": 13, "reward": 0.5286458333333334}
+{"type": "metrics", "step": 14, "reward": 0.53515625}
+Terminated by SIGTERM

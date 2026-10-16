@@ -1,0 +1,109 @@
+{
+  "pools": {
+    "pool_mixed.jsonl": {
+      "rows": 5993,
+      "sha256_full_local_file": "0cfcd3fc8b3c88d108fe2897823c9efe315b3c50dd70ef9225279da438031a91",
+      "compact_file": "pools/pool_mixed.compact.jsonl"
+    },
+    "pool_clean.jsonl": {
+      "rows": 2952,
+      "sha256_full_local_file": "a7b2b8639fd5125b74e30857008e6fb3a040e0f4531d11b577fe93d0992a0d0e",
+      "compact_file": "pools/pool_clean.compact.jsonl"
+    },
+    "pool_v2.jsonl": {
+      "rows": 3937,
+      "sha256_full_local_file": "a6a999dd7e571eef15c2df1e742dc08aee0eed61fbe0b4c0e34b10cd2bfad5bc",
+      "compact_file": "pools/pool_v2.compact.jsonl"
+    }
+  },
+  "runs": {
+    "n50000-v2": {
+      "rollouts.jsonl_sha256_full_local_file": "009c4ebfc5c0b0022389cb5b04c43d33e8c37c86e28fdf3ae2969d13989d51b2",
+      "files": [
+        "run_config.json",
+        "metrics.jsonl",
+        "stdout.log",
+        "trainer_job.json",
+        "dataloader.json",
+        "summary.txt",
+        "rollouts.compact.csv.gz"
+      ]
+    },
+    "n50000-clean3": {
+      "rollouts.jsonl_sha256_full_local_file": "44f12891a3cb1b179fe61ff75a7392d18df9d0ad1b5efdec87e076036033188c",
+      "files": [
+        "run_config.json",
+        "metrics.jsonl",
+        "stdout.log",
+        "trainer_job.json",
+        "dataloader.json",
+        "summary.txt",
+        "rollouts.compact.csv.gz"
+      ]
+    },
+    "n50000-pilot3": {
+      "rollouts.jsonl_sha256_full_local_file": "f9d56cce5cf2a61f989d9fcc124091c8d6b243066c45e0add5c684ea56c5b661",
+      "rollouts.run1-lr3e-6.jsonl_sha256_full_local_file": "58c0e4475b0a81dcb65589b54671a564c3ab40fd71ab5389fa7e5b6856eeab37",
+      "files": [
+        "run_config.json",
+        "run_config.run1-lr3e-6.json",
+        "metrics.jsonl",
+        "metrics.run1-lr3e-6.jsonl",
+        "stdout.log",
+        "stdout.run1-lr3e-6.log",
+        "trainer_job.json",
+        "dataloader.json",
+        "rollouts.compact.csv.gz",
+        "rollouts.run1-lr3e-6.compact.csv.gz"
+      ]
+    },
+    "union-1epoch-lr3e-6-hotload900": {
+      "rollouts.jsonl_sha256_full_local_file": "aa1f520b2fbe8a5d7af7903d343bf5886540ade381203ebf2ecaf7d415ab9420",
+      "files": [
+        "run_config.json",
+        "metrics.jsonl",
+        "trainer_job.json",
+        "dataloader.json",
+        "summary.txt",
+        "rollouts.compact.csv.gz"
+      ]
+    }
+  },
+  "results": {
+    "promoted": {
+      "slice": "test_r3",
+      "rows": 1200,
+      "source_dir": "outputs/anli-grpo-v2-step10-test/anli-grpo-v2-step10-eval3/zero-shot-v3-client-template"
+    },
+    "base": {
+      "slice": "test_r3",
+      "rows": 1200,
+      "source_dir": "outputs/anli-base-test-batch/qwen3-4b/zero-shot-v3"
+    }
+  },
+  "large_inputs": {
+    "outputs/teacher_traces/qwen3p5-397b-a17b/batch1/traces.jsonl": "b014f52ce0ec1c5153cb859fc5b0d227ec00ae5d2b26d20157aa9347432d1d36",
+    "outputs/teacher_traces/qwen3p5-397b-a17b/batch2_ent_wrong_r1/traces.jsonl": "00fc2f59c9aba4e97b7c615b60cc6c2f38dfbfc5afd908aa4abfcfcee6b965aa",
+    "outputs/qwen3-4b/zero-shot-v3/training_pool/train_r3_n50000_seed0_excl/pool.jsonl": "a1046f5fa0140c674a00d0e647f4c2470f642617d04f5e30885fc7f23998bfea",
+    "outputs/qwen3-4b/zero-shot-v3/training_pool/train_r3_n50000_seed0_excl/predictions.jsonl": "871a14c8b6814bccf5a861e52ce8ce265271f2f2b5ba80828d25e8eebac1db90"
+  },
+  "teacher_votes": {
+    "prompts": 8720
+  },
+  "environment": {
+    "python": "3.12.15",
+    "packages": {
+      "fireworks-ai": "1.2.24",
+      "torch": "2.14.1",
+      "transformers": "5.10.4",
+      "datasets": "5.1.0",
+      "tokenizers": "0.22.2"
+    },
+    "repo_commit": "d2c3c904398aebaf5e8317dc831683dffbb9be37",
+    "cookbook_commit": "4dfdb6eaf38eb7f5be17d7b25bd3dbb3da0f843e",
+    "trainer_job": "training-api-service-0092fcad",
+    "state": "JOB_STATE_DELETED",
+    "training_shape_version": "accounts/fireworks/trainingShapes/qwen3-4b-minimum/versions/i2yojzpo",
+    "accelerator_hint": 1
+  }
+}
