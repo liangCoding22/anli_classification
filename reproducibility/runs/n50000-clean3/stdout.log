@@ -1,0 +1,13 @@
+Warning: You are sending unauthenticated requests to the HF Hub. Please set a HF_TOKEN to enable higher rate limits and faster downloads.
+{"type": "eval", "step": 0, "dev/accuracy": 0.654, "dev/valid_accuracy": 0.654, "dev/dropped_ratio": 0.0, "dev/rows": 1000.0, "dev/strict_accuracy": 0.654, "dev/invalid_ratio": 0.01, "dev/incorrect_ratio": 0.336, "dev/recall_entailment": 0.7270029673590505, "dev/predicted_share_entailment": 0.328, "dev/recall_neutral": 0.7011834319526628, "dev/predicted_share_neutral": 0.425, "dev/recall_contradiction": 0.5292307692307693, "dev/predicted_share_contradiction": 0.237, "dev/macro_f1": 0.656724576140472}
+{"type": "metrics", "step": 1, "reward": 0.5559895833333334}
+{"type": "metrics", "step": 2, "reward": 0.5950520833333334}
+{"type": "metrics", "step": 3, "reward": 0.51953125}
+{"type": "metrics", "step": 4, "reward": 0.5807291666666666}
+{"type": "metrics", "step": 5, "reward": 0.4752604166666667}
+Sampler checkpoint name 'step-5-5220c26e' already used in this session — overwriting
+{"type": "eval", "step": 5, "dev/accuracy": 0.683, "dev/valid_accuracy": 0.683, "dev/dropped_ratio": 0.0, "dev/rows": 1000.0, "dev/strict_accuracy": 0.683, "dev/invalid_ratio": 0.002, "dev/incorrect_ratio": 0.315, "dev/recall_entailment": 0.8753709198813057, "dev/predicted_share_entailment": 0.428, "dev/recall_neutral": 0.46153846153846156, "dev/predicted_share_neutral": 0.224, "dev/recall_contradiction": 0.7138461538461538, "dev/predicted_share_contradiction": 0.346, "dev/macro_f1": 0.6726357295031647}
+ALERT: neutral dev recall 0.462 is 0.240 below the first evaluation (0.701) at step 5
+Stopping at step 5: filter ratio 56% over the last 3 steps exceeds 50%
+Stopped at step 5 (--max-steps 30)
+RL training finished. Final metrics: {'steps': 5}

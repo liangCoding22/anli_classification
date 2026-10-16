@@ -395,8 +395,9 @@ result (contradiction recall 0.568 -> 0.801 on test) is far larger than anything
   trainer and deployment (verified for both promoted checkpoints).
 - **Unverified or not done:** the cookbook's exact advantage call path in the synchronous loop was inferred from a single
   call site; the judge's serverless price was not checked; no teacher-disagreement ablation (keeping those prompts); the
-  v4 prompts were not tried on the promoted model; r1 and r2 test rounds were not run; the code and pools from these runs
-  are not committed (`outputs/` is gitignored).
+  v4 prompts were not tried on the promoted model; r1 and r2 test rounds were not run. The full pools and teacher traces
+  stay out of git (`outputs/` is gitignored); compact pools, run configs and logs, and the test predictions are in
+  `reproducibility/` (see its README).
 
 ## Architecture
 

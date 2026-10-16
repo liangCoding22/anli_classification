@@ -1,0 +1,56 @@
+{
+  "input_rows": 5993,
+  "teacher_verdicts": {
+    "contradiction/agree": 1547,
+    "contradiction/disagree": 312,
+    "contradiction/split": 119,
+    "entailment/agree": 984,
+    "entailment/disagree": 364,
+    "entailment/split": 129,
+    "neutral/agree": 1706,
+    "neutral/disagree": 590,
+    "neutral/split": 242
+  },
+  "kept_by_label": {
+    "entailment": 984,
+    "neutral": 1706,
+    "contradiction": 1547
+  },
+  "balanced_per_class": 984,
+  "balanced_rows": 2952,
+  "unbalanced_rows": 4237,
+  "balanced_n_correct_of_4_by_label": {
+    "entailment": {
+      "1": 251,
+      "2": 275,
+      "3": 458
+    },
+    "neutral": {
+      "1": 213,
+      "2": 263,
+      "3": 508
+    },
+    "contradiction": {
+      "1": 255,
+      "2": 297,
+      "3": 432
+    }
+  },
+  "seed": 0,
+  "traces": "outputs/teacher_traces/*/*/traces.jsonl",
+  "pool_v2": {
+    "rows": 3937,
+    "by_label": {
+      "entailment": 1259,
+      "neutral": 1419,
+      "contradiction": 1259
+    },
+    "neutral_share": 0.36,
+    "hard_rows": 297,
+    "hard_by_label": {
+      "entailment": 275,
+      "neutral": 3,
+      "contradiction": 19
+    }
+  }
+}

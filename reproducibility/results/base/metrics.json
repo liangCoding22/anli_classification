@@ -1,0 +1,132 @@
+{
+  "test_r3": {
+    "n": 1200,
+    "accuracy": 0.6366666666666667,
+    "strict_accuracy": 0.6366666666666667,
+    "malformed": 11,
+    "macro_f1": 0.6415214202344569,
+    "unparsed": 11,
+    "errors": 0,
+    "with_reasoning": 1200,
+    "per_class": {
+      "entailment": {
+        "precision": 0.7335164835164835,
+        "recall": 0.664179104477612,
+        "f1": 0.6971279373368147
+      },
+      "neutral": {
+        "precision": 0.5429141716566867,
+        "recall": 0.6766169154228856,
+        "f1": 0.602436323366556
+      },
+      "contradiction": {
+        "precision": 0.6944444444444444,
+        "recall": 0.5681818181818182,
+        "f1": 0.625
+      }
+    },
+    "confusion": {
+      "rows_gold_cols_pred": [
+        "entailment",
+        "neutral",
+        "contradiction"
+      ],
+      "matrix": [
+        [
+          267,
+          90,
+          39
+        ],
+        [
+          67,
+          272,
+          60
+        ],
+        [
+          30,
+          139,
+          225
+        ]
+      ]
+    },
+    "pass_at_k": {
+      "examples": 1200,
+      "pass@1": 0.6366666666666667,
+      "pass@3": null,
+      "pass@5": null,
+      "pass@8": null
+    },
+    "maj_at_k": {
+      "examples": 1200,
+      "maj@1": 0.6366666666666667,
+      "maj@3": null,
+      "maj@5": null,
+      "maj@8": null
+    }
+  },
+  "overall": {
+    "n": 1200,
+    "accuracy": 0.6366666666666667,
+    "strict_accuracy": 0.6366666666666667,
+    "malformed": 11,
+    "macro_f1": 0.6415214202344569,
+    "unparsed": 11,
+    "errors": 0,
+    "with_reasoning": 1200,
+    "per_class": {
+      "entailment": {
+        "precision": 0.7335164835164835,
+        "recall": 0.664179104477612,
+        "f1": 0.6971279373368147
+      },
+      "neutral": {
+        "precision": 0.5429141716566867,
+        "recall": 0.6766169154228856,
+        "f1": 0.602436323366556
+      },
+      "contradiction": {
+        "precision": 0.6944444444444444,
+        "recall": 0.5681818181818182,
+        "f1": 0.625
+      }
+    },
+    "confusion": {
+      "rows_gold_cols_pred": [
+        "entailment",
+        "neutral",
+        "contradiction"
+      ],
+      "matrix": [
+        [
+          267,
+          90,
+          39
+        ],
+        [
+          67,
+          272,
+          60
+        ],
+        [
+          30,
+          139,
+          225
+        ]
+      ]
+    },
+    "pass_at_k": {
+      "examples": 1200,
+      "pass@1": 0.6366666666666667,
+      "pass@3": null,
+      "pass@5": null,
+      "pass@8": null
+    },
+    "maj_at_k": {
+      "examples": 1200,
+      "maj@1": 0.6366666666666667,
+      "maj@3": null,
+      "maj@5": null,
+      "maj@8": null
+    }
+  }
+}

@@ -1,0 +1,62 @@
+Warning: You are sending unauthenticated requests to the HF Hub. Please set a HF_TOKEN to enable higher rate limits and faster downloads.
+{"type": "eval", "step": 0, "dev/accuracy": 0.656, "dev/valid_accuracy": 0.656, "dev/dropped_ratio": 0.0, "dev/rows": 1000.0, "dev/strict_accuracy": 0.656, "dev/invalid_ratio": 0.006, "dev/incorrect_ratio": 0.338, "dev/recall_entailment": 0.7329376854599406, "dev/predicted_share_entailment": 0.327, "dev/recall_neutral": 0.6982248520710059, "dev/predicted_share_neutral": 0.424, "dev/recall_contradiction": 0.5323076923076923, "dev/predicted_share_contradiction": 0.243, "dev/macro_f1": 0.6575178017901334}
+JUDGE: 500 calls, inconsistent 14, unclear 0, errors 0, unparsed 0
+{"type": "metrics", "step": 1, "reward": 0.5804036458333334}
+JUDGE: 1000 calls, inconsistent 34, unclear 1, errors 0, unparsed 0
+JUDGE: 1500 calls, inconsistent 46, unclear 3, errors 0, unparsed 0
+{"type": "metrics", "step": 2, "reward": 0.5501302083333334}
+Sampler checkpoint name 'step-2-8898232a' already used in this session — overwriting
+{"type": "eval", "step": 2, "dev/accuracy": 0.646, "dev/valid_accuracy": 0.646, "dev/dropped_ratio": 0.0, "dev/rows": 1000.0, "dev/strict_accuracy": 0.646, "dev/invalid_ratio": 0.008, "dev/incorrect_ratio": 0.346, "dev/recall_entailment": 0.6765578635014837, "dev/predicted_share_entailment": 0.298, "dev/recall_neutral": 0.7248520710059172, "dev/predicted_share_neutral": 0.453, "dev/recall_contradiction": 0.5323076923076923, "dev/predicted_share_contradiction": 0.241, "dev/macro_f1": 0.6496288944212815}
+ALERT: entailment dev recall 0.677 is 0.056 below the first evaluation (0.733) at step 2
+JUDGE: 2000 calls, inconsistent 65, unclear 3, errors 0, unparsed 0
+JUDGE: 2500 calls, inconsistent 80, unclear 4, errors 0, unparsed 0
+{"type": "metrics", "step": 3, "reward": 0.5491536458333334}
+JUDGE: 3000 calls, inconsistent 82, unclear 4, errors 0, unparsed 0
+JUDGE: 3500 calls, inconsistent 89, unclear 4, errors 0, unparsed 0
+{"type": "metrics", "step": 4, "reward": 0.5589192708333334}
+Sampler checkpoint name 'step-4-8898232a' already used in this session — overwriting
+{"type": "eval", "step": 4, "dev/accuracy": 0.659, "dev/valid_accuracy": 0.659, "dev/dropped_ratio": 0.0, "dev/rows": 1000.0, "dev/strict_accuracy": 0.659, "dev/invalid_ratio": 0.003, "dev/incorrect_ratio": 0.338, "dev/recall_entailment": 0.6468842729970327, "dev/predicted_share_entailment": 0.279, "dev/recall_neutral": 0.742603550295858, "dev/predicted_share_neutral": 0.453, "dev/recall_contradiction": 0.5846153846153846, "dev/predicted_share_contradiction": 0.265, "dev/macro_f1": 0.6621665669963256}
+ALERT: entailment dev recall 0.647 is 0.086 below the first evaluation (0.733) at step 4
+JUDGE: 4000 calls, inconsistent 93, unclear 4, errors 0, unparsed 0
+JUDGE: 4500 calls, inconsistent 94, unclear 4, errors 0, unparsed 0
+{"type": "metrics", "step": 5, "reward": 0.5716145833333334}
+JUDGE: 5000 calls, inconsistent 95, unclear 4, errors 0, unparsed 0
+JUDGE: 5500 calls, inconsistent 96, unclear 4, errors 0, unparsed 0
+{"type": "metrics", "step": 6, "reward": 0.6155598958333334}
+Sampler checkpoint name 'step-6-8898232a' already used in this session — overwriting
+{"type": "eval", "step": 6, "dev/accuracy": 0.67, "dev/valid_accuracy": 0.67, "dev/dropped_ratio": 0.0, "dev/rows": 1000.0, "dev/strict_accuracy": 0.67, "dev/invalid_ratio": 0.001, "dev/incorrect_ratio": 0.329, "dev/recall_entailment": 0.6468842729970327, "dev/predicted_share_entailment": 0.271, "dev/recall_neutral": 0.6863905325443787, "dev/predicted_share_neutral": 0.405, "dev/recall_contradiction": 0.676923076923077, "dev/predicted_share_contradiction": 0.323, "dev/macro_f1": 0.6735376327347788}
+ALERT: entailment dev recall 0.647 is 0.086 below the first evaluation (0.733) at step 6
+JUDGE: 6000 calls, inconsistent 97, unclear 4, errors 0, unparsed 0
+JUDGE: 6500 calls, inconsistent 101, unclear 4, errors 0, unparsed 0
+JUDGE: 7000 calls, inconsistent 102, unclear 5, errors 0, unparsed 0
+{"type": "metrics", "step": 7, "reward": 0.6217447916666666}
+JUDGE: 7500 calls, inconsistent 108, unclear 5, errors 0, unparsed 0
+JUDGE: 8000 calls, inconsistent 108, unclear 5, errors 0, unparsed 0
+{"type": "metrics", "step": 8, "reward": 0.5657552083333334}
+Sampler checkpoint name 'step-8-8898232a' already used in this session — overwriting
+{"type": "eval", "step": 8, "dev/accuracy": 0.682, "dev/valid_accuracy": 0.682, "dev/dropped_ratio": 0.0, "dev/rows": 1000.0, "dev/strict_accuracy": 0.682, "dev/invalid_ratio": 0.0, "dev/incorrect_ratio": 0.318, "dev/recall_entailment": 0.685459940652819, "dev/predicted_share_entailment": 0.283, "dev/recall_neutral": 0.6686390532544378, "dev/predicted_share_neutral": 0.388, "dev/recall_contradiction": 0.6923076923076923, "dev/predicted_share_contradiction": 0.329, "dev/macro_f1": 0.6852747388328115}
+JUDGE: 8500 calls, inconsistent 109, unclear 5, errors 0, unparsed 0
+JUDGE: 9000 calls, inconsistent 113, unclear 5, errors 0, unparsed 0
+JUDGE: 9500 calls, inconsistent 116, unclear 5, errors 0, unparsed 0
+{"type": "metrics", "step": 9, "reward": 0.5634765625}
+JUDGE: 10000 calls, inconsistent 118, unclear 5, errors 0, unparsed 0
+JUDGE: 10500 calls, inconsistent 118, unclear 5, errors 0, unparsed 0
+{"type": "metrics", "step": 10, "reward": 0.5618489583333334}
+Sampler checkpoint name 'step-10-8898232a' already used in this session — overwriting
+{"type": "eval", "step": 10, "dev/accuracy": 0.692, "dev/valid_accuracy": 0.692, "dev/dropped_ratio": 0.0, "dev/rows": 1000.0, "dev/strict_accuracy": 0.692, "dev/invalid_ratio": 0.001, "dev/incorrect_ratio": 0.307, "dev/recall_entailment": 0.712166172106825, "dev/predicted_share_entailment": 0.305, "dev/recall_neutral": 0.6272189349112426, "dev/predicted_share_neutral": 0.343, "dev/recall_contradiction": 0.7384615384615385, "dev/predicted_share_contradiction": 0.351, "dev/macro_f1": 0.6934455087433484}
+ALERT: neutral dev recall 0.627 is 0.071 below the first evaluation (0.698) at step 10
+JUDGE: 11000 calls, inconsistent 118, unclear 5, errors 0, unparsed 0
+JUDGE: 11500 calls, inconsistent 118, unclear 5, errors 0, unparsed 0
+JUDGE: 12000 calls, inconsistent 118, unclear 5, errors 0, unparsed 0
+JUDGE: 12500 calls, inconsistent 118, unclear 6, errors 0, unparsed 0
+{"type": "metrics", "step": 11, "reward": 0.66015625}
+JUDGE: 13000 calls, inconsistent 121, unclear 6, errors 0, unparsed 0
+JUDGE: 13500 calls, inconsistent 122, unclear 6, errors 0, unparsed 0
+{"type": "metrics", "step": 12, "reward": 0.5439453125}
+Sampler checkpoint name 'step-12-8898232a' already used in this session — overwriting
+{"type": "eval", "step": 12, "dev/accuracy": 0.694, "dev/valid_accuracy": 0.694, "dev/dropped_ratio": 0.0, "dev/rows": 1000.0, "dev/strict_accuracy": 0.694, "dev/invalid_ratio": 0.002, "dev/incorrect_ratio": 0.304, "dev/recall_entailment": 0.7477744807121661, "dev/predicted_share_entailment": 0.322, "dev/recall_neutral": 0.591715976331361, "dev/predicted_share_neutral": 0.317, "dev/recall_contradiction": 0.7446153846153846, "dev/predicted_share_contradiction": 0.359, "dev/macro_f1": 0.6943615020799548}
+ALERT: neutral dev recall 0.592 is 0.107 below the first evaluation (0.698) at step 12
+Stopping at step 12: neutral dev recall fell 0.107 below the first evaluation (limit 0.100)
+Stopped at step 12 (--max-steps 12)
+JUDGE: 13930 calls, inconsistent 123, unclear 6, errors 0, unparsed 0
+RL training finished. Final metrics: {'steps': 12}
